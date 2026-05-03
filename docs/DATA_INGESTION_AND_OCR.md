@@ -228,7 +228,7 @@ The threshold is configurable per deployment via `OCR_CONFIDENCE_THRESHOLD` env 
 
 ### If you're working on the dashboard (Frontend epic)
 
-1. OpenAPI schema is auto-generated at `http://localhost:8000/docs` (Swagger UI) and `http://localhost:8000/openapi.json`.
+1. OpenAPI schema is auto-generated at `http://localhost:8989/docs` (Swagger UI) and `http://localhost:8989/openapi.json`.
 2. The review-queue flow:
    - `GET /api/v1/review-queue` returns paginated items
    - For each item, show `low_confidence_fields` highlighted, with the original image
@@ -255,8 +255,8 @@ docker compose -f infrastructure/docker/docker-compose.dev.yml up -d
 
 # 3. Run the API in dev mode
 cd services/api
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+python3 -m venv .venv && source .venv/bin/activate
+python -m pip install -e ".[dev]"
 uvicorn app.main:app --reload
 
 # 4. In another terminal, run the OCR worker

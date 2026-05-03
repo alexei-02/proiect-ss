@@ -31,7 +31,7 @@ services:
       dockerfile: Dockerfile.dev
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8989:8989"
     environment:
       ENV: development
       MQTT_HOST: mosquitto
@@ -67,7 +67,7 @@ services:
     # of these for "convenience" is a regression — discuss in PR review.
     read_only: true
     tmpfs:
-      - /tmp:size=100m,exec=false,nosuid
+      - /tmp:size=100m,noexec,nosuid
     cap_drop:
       - ALL
     security_opt:

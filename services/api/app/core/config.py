@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # HTTP
     http_host: str = "0.0.0.0"
-    http_port: int = 8000
+    http_port: int = 8989
     max_upload_size_bytes: int = 10 * 1024 * 1024  # 10 MB
     max_json_body_bytes: int = 256 * 1024  # 256 KB
 

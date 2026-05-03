@@ -34,8 +34,8 @@ USER 65532:65532
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-EXPOSE 8000
+EXPOSE 8989
 
 # Use uvicorn directly. In production put this behind nginx or a service
 # mesh proxy that terminates TLS.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8989", "--proxy-headers"]

@@ -22,7 +22,8 @@ openssl genrsa -out server.key 4096
 openssl req -new -key server.key -out server.csr \
   -subj "${SUBJ_BASE}/CN=mosquitto"
 openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
-  -out server.crt -days "$DAYS" -sha256
+  -out server.crt -days "$DAYS" -sha256 \
+  -extfile <(printf "subjectAltName=DNS:mosquitto,DNS:localhost,IP:127.0.0.1")
 
 echo ">> Generating client cert: api_server"
 openssl genrsa -out api_server.key 4096
