@@ -42,8 +42,8 @@ open https://localhost:8443
 
 | Service | Owner | Status | Description |
 |---------|-------|--------|-------------|
-| `services/api` | *(you)* | ✅ Initial impl | REST endpoints + MQTT consumer for image ingestion |
-| `services/ocr` | *(you)* | ✅ Initial impl | Sandboxed OCR worker with confidence thresholding |
+| `services/api` | Alexei | ⏳ | REST endpoints + MQTT consumer for image ingestion |
+| `services/ocr` | Alexei | ⏳ | Sandboxed OCR worker with confidence thresholding |
 | `services/web` | TBD | ⏳ | React/Vue dashboard for review queue + reports |
 | `infrastructure/postgres` | TBD | ⏳ | Schema, encryption-at-rest, migrations |
 | `ci/*` | TBD | ⏳ | GitHub Actions, scanners, AI agent governance |

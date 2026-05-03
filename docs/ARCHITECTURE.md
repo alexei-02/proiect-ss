@@ -1,6 +1,6 @@
 # Architecture Overview
 
-This document describes the runtime architecture of the medical OCR platform. For implementation status see [DATA_INGESTION_AND_OCR.md](DATA_INGESTION_AND_OCR.md).
+This document describes the runtime architecture of the medical OCR platform.
 
 ## High-level diagram
 
