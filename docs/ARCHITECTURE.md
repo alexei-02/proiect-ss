@@ -75,13 +75,13 @@ The OCR engine is a synchronous, CPU-bound, attacker-exposed component. Putting 
 
 1. Device captures image, signs MQTT publish with its client cert.
 2. Mosquitto verifies cert against CA, looks up CN in ACL, accepts publish to `medical/images/{cn}/upload`.
-3. API service (subscribed) receives message, validates topic regex, creates `Document` row in DB with status `queued`.
-4. API writes job manifest + image bytes to OCR queue (shared volume / Redis Stream).
+3. API service (subscribed) receives message, validates topic regex, creates `Document` row in PostgreSQL with `status=queued`.
+4. API writes job manifest + image bytes to OCR queue (shared volume).
 5. OCR worker picks up job, validates image (PIL `verify()` + size check), runs OCR.
-6. Worker extracts fields, applies confidence gate, builds `OCRResult` JSON.
-7. Worker publishes to `medical/ocr/{device}/results`.
-8. API service receives result, updates `Document` row. If `needs_review=True`, also writes to `review_queue`.
-9. Doctor (via dashboard) sees pending items, reviews, submits correction → API persists final values.
+6. Worker extracts fields, applies confidence gate (≥ 0.95), builds `OCRResult` JSON.
+7. Worker writes `<doc_id>.result.json` to the shared queue volume.
+8. API result poller (background task, 2s interval) reads the result file, calls `store.attach_ocr_result()`, deletes the file. Document status becomes `pending_review` (confidence < 0.95 on any field) or `completed`.
+9. Doctor (via dashboard) queries `GET /api/v1/review-queue`, reviews flagged items, submits correction via `POST /api/v1/review-queue/{id}/resolve` → status set to `completed`.
 
 ## Failure modes & mitigations
 

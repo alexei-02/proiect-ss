@@ -69,7 +69,13 @@ class DocumentSubmission(BaseModel):
 
 
 class DocumentResponse(BaseModel):
-    """What the API returns to clients about a stored document."""
+    """What the API returns to clients about a stored document.
+
+    ocr_result is:
+      - null          while queued / processing
+      - "pending_review" when OCR completed but confidence is below threshold
+      - an OCRResult object when processing completed with sufficient confidence
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -77,4 +83,4 @@ class DocumentResponse(BaseModel):
     status: DocumentStatus
     submitted_at: datetime
     device_id: str
-    ocr_result: OCRResult | None = None
+    ocr_result: OCRResult | str | None = None

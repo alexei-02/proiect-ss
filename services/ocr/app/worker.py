@@ -1,9 +1,8 @@
 """OCR worker entry point.
 
 Polls the queue directory for `*.job.json` files, runs OCR, writes the
-result back to the API service (currently via a sibling JSON file the
-API would observe; in production this becomes an MQTT publish to
-`medical/ocr/<device>/results`).
+result back to the API service via a sibling JSON file that the result
+poller reads (in production this becomes an MQTT publish).
 """
 
 import asyncio
@@ -15,14 +14,14 @@ from pathlib import Path
 from uuid import UUID
 
 from app.core.config import get_settings
-from app.core.engine import get_engine, validate_image
+from app.core.engine import MockOCREngine, OCREngine, get_engine, validate_image
 from app.core.extractor import extract_fields, gate_confidence
 from app.core.schemas import OCRResult
 
 logger = logging.getLogger(__name__)
 
 
-async def process_job(job_path: Path) -> None:
+async def process_job(job_path: Path, engine: OCREngine | MockOCREngine) -> None:
     """Process a single queued OCR job."""
     settings = get_settings()
     started = time.monotonic()
@@ -40,7 +39,6 @@ async def process_job(job_path: Path) -> None:
         validate_image(image_path, max_pixels=settings.max_image_pixels)
     except (FileNotFoundError, ValueError) as exc:
         logger.error("Image validation failed for %s: %s", image_path, exc)
-        # Still emit a failed-result marker so the API knows the doc is dead.
         _write_result(
             settings.queue_dir,
             OCRResult(
@@ -57,7 +55,6 @@ async def process_job(job_path: Path) -> None:
         _cleanup(job_path, image_path)
         return
 
-    engine = get_engine()
     blocks = engine.read(image_path)
 
     fields = extract_fields(blocks)
@@ -95,13 +92,16 @@ def _cleanup(job_path: Path, image_path: Path) -> None:
 async def main() -> None:
     settings = get_settings()
     settings.queue_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("OCR worker started, queue=%s", settings.queue_dir)
+
+    logger.info("Loading OCR engine...")
+    engine = get_engine()
+    logger.info("OCR engine ready, queue=%s", settings.queue_dir)
 
     while True:
         jobs = sorted(settings.queue_dir.glob("*.job.json"))
         for job in jobs:
             try:
-                await process_job(job)
+                await process_job(job, engine)
             except Exception as exc:  # pragma: no cover
                 logger.exception("Failed to process %s: %s", job, exc)
         if not jobs:

@@ -20,7 +20,7 @@ import paho.mqtt.client as mqtt
 from app.core.config import Settings
 from app.schemas.ocr import OCRResult
 from app.services.ocr_client import OCRClient
-from app.services.storage import _InMemoryStore
+from app.services.storage import PostgresStore
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class MQTTConsumer:
         self,
         settings: Settings,
         ocr_client: OCRClient,
-        store: _InMemoryStore,
+        store: PostgresStore,
     ) -> None:
         self.settings = settings
         self.ocr_client = ocr_client

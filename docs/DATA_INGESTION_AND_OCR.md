@@ -1,23 +1,25 @@
 # Data Ingestion & OCR Processing — Implementation Guide
 
-> **For the team:** This document covers everything that has been built in `services/api` and `services/ocr`. Read this before starting your own tasks if you need to integrate with the API, the database, the MQTT broker, or the OCR pipeline.
+> **For the team:** This document covers everything built in `services/api` and `services/ocr`. Read this before starting your own tasks if you need to integrate with the API, the database, the MQTT broker, or the OCR pipeline.
 
 ---
 
-## What's covered here (and what's not)
+## What's covered here
 
-✅ **Done in this slice (E1 + E2):**
+✅ **Done:**
 - MQTT broker (Mosquitto) with mTLS and topic-level ACLs
 - Per-route rate limiting + payload size caps (DoS defense)
-- REST API skeleton (FastAPI) with auth-stub middleware
+- REST API (FastAPI) with auth-stub middleware
 - MQTT consumer that pulls inbound images and pushes to OCR queue
 - OCR engine integration (EasyOCR) with structured JSON output
 - Confidence thresholding (≥95% rule) → manual review queue
 - OCR sandbox container (distroless, non-root, no network egress)
+- PostgreSQL persistence via Prisma (schema + migrations)
+- Background result poller (bridges file queue → database)
 - Unit tests for confidence gating, schema validation, rate limiter
 
 ❌ **Out of scope here (other tasks):**
-- Full PostgreSQL schema with PHI encryption at rest → **DB epic**
+- PHI encryption at rest (column-level AES-256-GCM) → **DB epic**
 - JWT issuance / RBAC enforcement (placeholder middleware in place) → **Auth epic**
 - Frontend review UI → **Dashboard epic**
 - TLS cert lifecycle management → **Infra epic**
@@ -25,27 +27,25 @@
 
 ---
 
-## Architecture (this slice)
+## Architecture
 
 ```
-┌──────────────┐  mTLS+MQTT  ┌──────────────┐  internal  ┌──────────────┐
-│  Edge device │ ──────────► │  Mosquitto   │ ─────────► │   API svc    │
-│  (ESP32-CAM) │             │   broker     │            │ (MQTT consumer)│
-└──────────────┘             └──────────────┘            └──────┬───────┘
-                                                                 │
-                              ┌──────────────────────────────────┘
-                              │ async job
-                              ▼
-                       ┌──────────────┐  JSON results  ┌──────────────┐
-                       │  OCR worker  │ ─────────────► │  PostgreSQL  │
-                       │ (sandboxed)  │                │ (placeholder)│
-                       └──────────────┘                └──────────────┘
-                              │
-                              │ confidence < 95%
-                              ▼
-                       ┌──────────────┐
-                       │ review queue │
-                       └──────────────┘
+┌──────────────┐  mTLS+MQTT  ┌──────────────┐  internal  ┌───────────────────┐
+│  Edge device │ ──────────► │  Mosquitto   │ ─────────► │   API service     │
+│  (ESP32-CAM) │             │   broker     │            │  MQTT consumer    │
+└──────────────┘             └──────────────┘            │  result poller    │
+                                                          └────────┬──────────┘
+                                                                   │
+                                              ┌────────────────────┤
+                                              │ *.job.json         │
+                                              ▼                    │ Prisma
+                                       ┌──────────────┐           ▼
+                                       │  OCR worker  │    ┌──────────────┐
+                                       │ (sandboxed)  │    │  PostgreSQL  │
+                                       └──────┬───────┘    └──────────────┘
+                                              │ *.result.json       ▲
+                                              └─────────────────────┘
+                                                   result poller reads
 ```
 
 ---
@@ -68,28 +68,22 @@
 | `medical/devices/{device_id}/status` | device → server | device | api_server |
 | `medical/alerts/#` | server → server | api_server | admin_service |
 
-The `+` (single-level) wildcard is allowed only for the API server reading from any device. The `#` (multi-level) wildcard is allowed only for `admin_service`. Devices can never use wildcards.
+The `+` wildcard is allowed only for the API server reading from any device. The `#` wildcard only for `admin_service`. Devices cannot use wildcards.
 
 ### mTLS authentication
 
-Authentication is **certificate-based**, not username/password. The Common Name (CN) on the device's client cert becomes the username for ACL checks (`use_identity_as_username true`). This means:
-
-- A device cannot spoof another device's topic — the cert is bound to the CN.
-- Compromising one device's cert does not grant access to others.
-- Rotating credentials = revoking and reissuing the cert.
+Authentication is **certificate-based**. The CN on the device's client cert becomes the MQTT username for ACL checks (`use_identity_as_username true`). A device cannot spoof another device's topic — the cert is bound to the CN.
 
 Dev certs are generated by `scripts/gen-dev-certs.sh`. **Do not use these in production.**
 
 ### DoS protections
 
 ```conf
-message_size_limit  10485760    # 10 MB max payload (medical scans rarely exceed 8 MB)
-max_inflight_messages 20        # Per-client in-flight queue cap
-max_queued_messages 100         # Per-client offline queue
-max_connections 500             # Global connection cap
+message_size_limit  10485760    # 10 MB max payload
+max_inflight_messages 20
+max_queued_messages 100
+max_connections 500
 ```
-
-These can be tuned in `mosquitto.conf`.
 
 ---
 
@@ -97,70 +91,98 @@ These can be tuned in `mosquitto.conf`.
 
 ### Stack
 
-- **FastAPI** (Python 3.11+) — chosen over Flask for built-in OpenAPI, async support, Pydantic validation
-- **Uvicorn** as ASGI server
+- **FastAPI** (Python 3.11+) — OpenAPI, async, Pydantic validation
+- **Uvicorn** ASGI server
 - **paho-mqtt** for the MQTT consumer
 - **slowapi** for rate limiting
-- **pydantic v2** for schema validation
+- **Prisma** (prisma-client-py) for PostgreSQL access
 
-### Endpoints (current)
+### Endpoints
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
 | `GET`  | `/health` | Liveness probe | none |
-| `GET`  | `/ready` | Readiness probe (checks MQTT + OCR) | none |
-| `POST` | `/api/v1/documents` | Direct upload (alternative to MQTT) | RBAC: doctor, receptionist |
-| `GET`  | `/api/v1/documents/{id}` | Fetch processed document | RBAC: doctor, receptionist, auditor |
+| `GET`  | `/ready` | Readiness probe | none |
+| `POST` | `/api/v1/documents` | Direct upload (alternative to MQTT) | RBAC: doctor |
+| `GET`  | `/api/v1/documents/{id}` | Fetch document + OCR result | RBAC: doctor |
 | `GET`  | `/api/v1/review-queue` | List items below confidence threshold | RBAC: doctor |
 | `POST` | `/api/v1/review-queue/{id}/resolve` | Manually correct OCR output | RBAC: doctor |
-| `GET`  | `/api/v1/metrics/ocr` | OCR latency, success rate | RBAC: admin, auditor |
+| `GET`  | `/api/v1/metrics/ocr` | OCR latency, queue depth | RBAC: auditor |
 
-> **For Auth epic:** the `Depends(require_role(...))` decorator in `app/core/security.py` is a stub that returns a hardcoded user. Replace it with your JWT verifier — the interface contract is documented in that file.
+> **For Auth epic:** `app/core/security.py` is a stub returning a hardcoded user. Replace `require_role()` with real JWT verification — the function signature must not change.
+
+### `ocr_result` field in document responses
+
+| Status | `ocr_result` value |
+|--------|--------------------|
+| `queued` | `null` |
+| `pending_review` | `"pending_review"` (string) |
+| `completed` | Full `OCRResult` JSON object |
 
 ### Rate limiting
 
-Per-route, in-memory (Redis-backed in production):
-
 ```python
-@limiter.limit("10/minute")        # for sensitive write endpoints
-@limiter.limit("100/minute")       # for read endpoints
-@limiter.limit("3/minute")         # for upload endpoint
+@limiter.limit("3/minute")    # upload endpoint
+@limiter.limit("10/minute")   # write endpoints
+@limiter.limit("100/minute")  # read endpoints
 ```
 
-Limits are configurable via env vars (see `services/api/.env.example`).
-
 ### Request size limits
-
-Beyond MQTT's broker-level cap, the API enforces:
 
 - `MAX_UPLOAD_SIZE = 10 MB` — checked in middleware before body is fully read
 - `MAX_JSON_BODY = 256 KB` — applied to all non-upload routes
 
 Both return `413 Payload Too Large` if exceeded.
 
-### Input validation
+---
 
-Every request body is a Pydantic model. **Never read `request.body` directly** in route handlers — it bypasses validation.
+## 3. Database — `services/api/prisma/`
+
+### Schema
+
+```prisma
+model Document {
+  id          String   @id @default(uuid()) @db.Uuid
+  status      String                          // queued | pending_review | completed | failed
+  submittedAt DateTime @default(now())
+  deviceId    String
+  ocrResult   Json?                           // full OCRResult JSON; null until processed
+}
+```
+
+### Migrations
+
+Migration files live in `services/api/prisma/migrations/` and are baked into the Docker image. `entrypoint.sh` runs `prisma migrate deploy` on every container start (idempotent).
+
+To create a new migration after schema changes:
+
+```bash
+docker exec $(docker compose -f infrastructure/docker/docker-compose.dev.yml ps -q api) sh -c \
+  "DATABASE_URL=postgresql://medical:dev_only_replace_me@postgres:5432/medical_ocr \
+   prisma migrate dev --name <name> --schema /app/prisma/schema.prisma --skip-generate"
+docker cp <container_id>:/app/prisma/migrations ./services/api/prisma/migrations
+docker compose -f infrastructure/docker/docker-compose.dev.yml up --build -d api
+```
+
+### PHI encryption (pending — DB epic)
+
+The `ocrResult` JSONB column stores `patient_name`, `medication`, and `raw_text` in plaintext in dev. Before production, the DB epic must add column-level AES-256-GCM encryption. See `docs/PHI_FIELDS.md`.
 
 ---
 
-## 3. OCR service — `services/ocr/`
+## 4. OCR service — `services/ocr/`
 
-### Why a separate service?
+### Sandbox
 
-The OCR engine is the **highest-risk component**: it processes attacker-controlled image bytes. A malformed image could trigger a CVE in the underlying decoder (libpng, libjpeg, OpenCV) and lead to RCE. So the OCR runs in:
-
-- A separate container with its own user (UID 65532, distroless `nonroot`)
-- **No network egress** (egress firewall + container has no listening ports)
-- Read-only filesystem except `/tmp` (tmpfs, 100 MB)
+The OCR container runs with:
+- No network egress
+- Read-only filesystem except `/tmp` (tmpfs, 100 MB, `noexec`)
 - `--cap-drop=ALL`, `--security-opt=no-new-privileges`
-- Resource limits: 1 CPU, 1 GB RAM
-
-The API service talks to OCR via an internal queue (Redis or RabbitMQ — currently using a simple file-based queue for dev, see `services/ocr/app/core/queue.py`).
+- Distroless base image, UID 65532
 
 ### Output schema
 
-Every OCR result conforms to:
+Single source of truth: `services/api/app/schemas/ocr.py`
 
 ```json
 {
@@ -168,110 +190,105 @@ Every OCR result conforms to:
   "processed_at": "2026-05-03T12:34:56Z",
   "ocr_engine": "easyocr-1.7.1",
   "fields": {
-    "patient_name": {
-      "value": "Ion Popescu",
-      "confidence": 0.98,
-      "bounding_box": [120, 80, 340, 110]
-    },
-    "medication": {
-      "value": "Atorvastatin 20mg",
-      "confidence": 0.92,
-      "bounding_box": [120, 130, 380, 160]
-    },
-    "expiry_date": {
-      "value": "2026-08-15",
-      "confidence": 0.96,
-      "bounding_box": [120, 180, 280, 210]
-    }
+    "patient_name": { "value": "Ion Popescu", "confidence": 0.98, "bounding_box": [10, 10, 200, 30] },
+    "medication":   { "value": "Atorvastatin 20mg", "confidence": 0.92, "bounding_box": [10, 40, 250, 60] },
+    "expiry_date":  { "value": "2026-08-15", "confidence": 0.99, "bounding_box": [10, 70, 100, 90] }
   },
   "needs_review": true,
   "low_confidence_fields": ["medication"],
-  "raw_text": "... full OCR dump for audit ..."
+  "raw_text": "...",
+  "processing_time_ms": 30
 }
 ```
 
-The Pydantic schema is in `services/api/app/schemas/ocr.py` — import from there, don't duplicate.
+### OCR engine — real vs mock
 
-### Confidence thresholding rule
+| Mode | Dockerfile | `MOCK_OCR` | When to use |
+|------|-----------|------------|-------------|
+| Real EasyOCR | `Dockerfile.ocr` | `0` | Default dev/prod — reads actual image pixels |
+| Mock | `Dockerfile.dev` | `1` | Unit tests, CI — returns hardcoded data, no torch dependency |
 
-```python
-CONFIDENCE_THRESHOLD = 0.95
+**First-run model download**: on the first container start with `Dockerfile.ocr`, EasyOCR downloads ~500 MB of model weights (English + Romanian). These are stored in the `easyocr_models` Docker volume at `/models` inside the container. Subsequent starts reuse the cache — no re-download. Model files are excluded from the repo via `.gitignore`.
 
-needs_review = any(
-    field.confidence < CONFIDENCE_THRESHOLD
-    for field in result.fields.values()
-)
+To switch back to mock mode temporarily:
+```bash
+# In docker-compose.dev.yml, change the ocr service:
+#   dockerfile: Dockerfile.dev
+#   MOCK_OCR: "1"
+docker compose -f infrastructure/docker/docker-compose.dev.yml up --build -d ocr
 ```
 
-If `needs_review=True`, the result is written to the `review_queue` table and the record is marked `status='pending_review'`. Doctors then resolve it via `POST /api/v1/review-queue/{id}/resolve`.
+### Confidence threshold
 
-The threshold is configurable per deployment via `OCR_CONFIDENCE_THRESHOLD` env var, but **the default of 0.95 should not be lowered** without a TARA review — false positives in medication names are a patient safety issue.
+Default `0.95` — configurable via `OCR_CONFIDENCE_THRESHOLD` env var. **Do not lower without a TARA review.**
 
----
+### Result delivery (file queue → DB)
 
-## 4. How to integrate (for other team members)
-
-### If you're working on the database (DB epic)
-
-1. The OCR result schema is in `services/api/app/schemas/ocr.py`. Mirror these fields in your SQLAlchemy models.
-2. The fields requiring **encryption at rest**: `patient_name`, `medication`, `raw_text`, plus any field flagged in `docs/PHI_FIELDS.md`.
-3. There's a placeholder DB layer at `services/api/app/services/storage.py` — replace it with real SQLAlchemy. The interface (`save_document`, `get_document`, `list_review_queue`) should remain the same so the API routes don't change.
-
-### If you're working on auth (Auth epic)
-
-1. The stub is in `services/api/app/core/security.py`. The `require_role(role: str)` dependency must:
-   - Verify the JWT signature
-   - Return a `User` object with at minimum: `id`, `username`, `roles[]`
-   - Raise `HTTPException(403)` if the role is missing
-2. All routes already declare their required role — you don't need to touch the routes.
-3. JWT issuance endpoint should live at `POST /api/v1/auth/login`, returning `{access_token, refresh_token}`. The route file `app/api/routes/auth.py` is empty and waiting for you.
-
-### If you're working on the dashboard (Frontend epic)
-
-1. OpenAPI schema is auto-generated at `http://localhost:8989/docs` (Swagger UI) and `http://localhost:8989/openapi.json`.
-2. The review-queue flow:
-   - `GET /api/v1/review-queue` returns paginated items
-   - For each item, show `low_confidence_fields` highlighted, with the original image
-   - `POST /api/v1/review-queue/{id}/resolve` accepts `{corrected_fields: {...}}`
-3. WebSocket endpoint for real-time queue updates is **not implemented** — currently you must poll. Add it if needed.
-
-### If you're working on CI/CD (CI/CD epic)
-
-1. The API service has a `Dockerfile` (production) and `Dockerfile.dev` (with hot-reload).
-2. Tests are runnable via `cd services/api && pytest` or `cd services/ocr && pytest`. They are completely deterministic — no network calls.
-3. Coverage config is in `services/api/pyproject.toml` — branch coverage on `app/core/security.py`, `app/services/ocr_client.py`, and `app/mqtt/consumer.py` must stay at 100%.
-4. SBOM generation: `pip install cyclonedx-bom && cyclonedx-py -o sbom.json` from each service directory.
+The OCR worker writes `<doc_id>.result.json` to the shared volume. The API's `result_poller.py` background task polls every 2 seconds, reads the file, persists it via Prisma, and deletes the file.
 
 ---
 
-## 5. Local development
+## 5. Integration guide
+
+### Auth epic
+
+1. Replace `services/api/app/core/security.py` stub with real JWT verifier.
+2. `require_role(role)` must return a `User(id, username, roles[])` and raise `HTTPException(403)` on missing role.
+3. All routes already declare their required role — do not touch the routes.
+4. JWT endpoint: `POST /api/v1/auth/login` → `{access_token, refresh_token}`.
+
+### Dashboard epic
+
+1. OpenAPI schema at `http://localhost:8989/openapi.json`, Swagger UI at `/docs`.
+2. Review queue flow: `GET /api/v1/review-queue` → show `low_confidence_fields` highlighted → `POST /api/v1/review-queue/{id}/resolve` with `{corrected_fields: {...}}`.
+3. Poll for updates — WebSocket push not implemented.
+
+### CI/CD epic
+
+1. Tests: `cd services/api && pytest` and `cd services/ocr && pytest`. No network calls needed.
+2. Branch coverage on `security.py`, `ocr_client.py`, `mqtt/consumer.py` must stay at 100%.
+3. SBOM: `cyclonedx-py -o sbom.json` from each service directory.
+
+---
+
+## 6. Local development
+
+Everything runs in containers. From the repo root:
 
 ```bash
-# 1. Generate dev certs (one-time)
-./scripts/gen-dev-certs.sh
+# First run (generates certs, creates DB schema, starts all services)
+./start.sh
 
-# 2. Start broker + DB + redis
-docker compose -f infrastructure/docker/docker-compose.dev.yml up -d
+# Subsequent runs
+./start.sh
 
-# 3. Run the API in dev mode
+# Send a test image via MQTT
+python scripts/send_test_image.py \
+  --device device_dev_001 \
+  --file services/ocr/tests/fixtures/sample_prescription_01.png \
+  --cert infrastructure/mosquitto/certs/device_dev_001.crt \
+  --key  infrastructure/mosquitto/certs/device_dev_001.key \
+  --ca   infrastructure/mosquitto/certs/ca.crt
+
+# Upload via HTTP and poll result
+curl -X POST http://localhost:8989/api/v1/documents \
+  -F "device_id=device_dev_001" \
+  -F "file=@services/ocr/tests/fixtures/sample_prescription_01.png"
+# → {"id": "<doc_id>", "status": "queued", ...}
+# Wait ~2 seconds, then:
+curl http://localhost:8989/api/v1/documents/<doc_id>
+# → ocr_result: "pending_review"  (medication confidence 0.92 < 0.95)
+
+# Browse the DB
 cd services/api
-python3 -m venv .venv && source .venv/bin/activate
-python -m pip install -e ".[dev]"
-uvicorn app.main:app --reload
-
-# 4. In another terminal, run the OCR worker
-cd services/ocr
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-python -m app.worker
-
-# 5. Send a test image via MQTT
-python scripts/send_test_image.py --device dev_device_001 --file tests/fixtures/sample_prescription.png
+DATABASE_URL=postgresql://medical:dev_only_replace_me@localhost:5432/medical_ocr \
+  prisma studio --schema prisma/schema.prisma
+# Opens http://localhost:5555
 ```
 
 ---
 
-## 6. Tests
+## 7. Tests
 
 ```bash
 cd services/api && pytest -v --cov=app --cov-branch
@@ -280,32 +297,33 @@ cd services/ocr && pytest -v --cov=app --cov-branch
 
 Critical test files:
 
-- `services/api/tests/test_rate_limit.py` — verifies DoS limits return 429
-- `services/api/tests/test_ocr_schema.py` — schema validation
-- `services/api/tests/test_confidence_gate.py` — the 95% rule
+- `services/api/tests/test_rate_limit.py` — 429 on DoS
 - `services/api/tests/test_payload_size.py` — 413 on oversized uploads
-- `services/ocr/tests/test_sandbox.py` — verifies the worker runs without elevated privileges
+- `services/api/tests/test_confidence_gate.py` — 95% rule
+- `services/api/tests/test_ocr_schema.py` — schema validation
+- `services/api/tests/test_mqtt_consumer.py` — MQTT message handling
+- `services/ocr/tests/test_extractor.py` — field extraction heuristics
 
 ---
 
-## 7. Open questions / decisions for the team
+## 8. Open questions
 
-1. **Queue technology** — currently file-based for dev. Production should be Redis Streams or RabbitMQ. Decision pending the infra task.
-2. **OCR engine choice** — EasyOCR is the default. DeepSeek-OCR was evaluated but requires a GPU (deferred to a v2). Tesseract was rejected for low confidence on medical handwriting.
-3. **Review queue retention** — how long do we keep manually-corrected items? Compliance team needs to weigh in.
-4. **Multi-language support** — Romanian + English currently. Add Hungarian/German if the deployment scope expands.
+1. **Queue technology** — file-based for dev. Production should be Redis Streams or RabbitMQ.
+2. **OCR engine** — EasyOCR default. DeepSeek-OCR evaluated but requires GPU (v2). Tesseract rejected for low confidence on medical handwriting.
+3. **Review queue retention** — how long to keep manually-corrected items? Compliance team needs to weigh in.
+4. **Multi-language** — Romanian + English. Hungarian/German if deployment scope expands.
 
 ---
 
-## 8. Quick reference — files you'll likely touch
+## 9. Quick reference
 
-| If you need to... | Go to... |
-|-------------------|----------|
+| If you need to… | Go to… |
+|-----------------|--------|
 | Change MQTT topics or ACLs | `infrastructure/mosquitto/acl.conf` |
 | Add a new API endpoint | `services/api/app/api/routes/` |
 | Modify the OCR output schema | `services/api/app/schemas/ocr.py` |
 | Plug in real auth | `services/api/app/core/security.py` |
-| Plug in real database | `services/api/app/services/storage.py` |
+| Change DB schema | `services/api/prisma/schema.prisma` + new migration |
 | Tune rate limits | `services/api/app/core/limiter.py` |
 | Tune confidence threshold | `services/ocr/app/core/config.py` |
-| Add a new OCR field | Update both schema (above) and `services/ocr/app/core/extractor.py` |
+| Add a new OCR field | `services/api/app/schemas/ocr.py` + `services/ocr/app/core/extractor.py` |

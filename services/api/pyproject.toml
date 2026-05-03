@@ -12,6 +12,7 @@ dependencies = [
     "slowapi>=0.1.9",
     "python-multipart>=0.0.9",
     "httpx>=0.27.0",
+    "prisma>=0.15.0",
 ]
 
 [project.optional-dependencies]

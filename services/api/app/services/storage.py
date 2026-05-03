@@ -1,85 +1,90 @@
 """
-Storage layer (in-memory stub).
+Storage layer — PostgreSQL via Prisma.
 
-THIS IS A STUB. The DB epic owner replaces it with SQLAlchemy + Postgres.
-The interface (function names, arguments, return types) MUST stay the
-same so the API routes don't change.
+Interface contract (kept identical to the original stub so routes are unchanged):
+  create_document(*, device_id, status) -> DocumentResponse
+  get_document(doc_id)                  -> DocumentResponse | None
+  attach_ocr_result(doc_id, result)     -> DocumentResponse
+  list_review_queue(*, offset, limit)   -> list[OCRResult]
+  resolve_review_item(doc_id)           -> None
 
-Contract for the DB epic implementer:
--------------------------------------
-- All `*_async` functions stay async (the routes await them).
-- Fields flagged as PHI in docs/PHI_FIELDS.md are encrypted at rest.
-- Listing functions support pagination via (offset, limit).
+PHI fields (patient_name, medication, raw_text) must be encrypted at rest
+before this module is used in production — see docs/PHI_FIELDS.md.
 """
 
 from datetime import datetime, timezone
-from threading import Lock
-from uuid import UUID, uuid4
+from uuid import UUID
+
+from prisma import Json, Prisma
 
 from app.schemas.ocr import DocumentResponse, DocumentStatus, OCRResult
 
 
-class _InMemoryStore:
-    """Thread-safe in-memory replacement for the real DB."""
+def _to_response(doc) -> DocumentResponse:  # type: ignore[no-untyped-def]
+    """Map a Prisma Document row to the API response model."""
+    status = DocumentStatus(doc.status)
 
-    def __init__(self) -> None:
-        self._docs: dict[UUID, DocumentResponse] = {}
-        self._review_queue: dict[UUID, OCRResult] = {}
-        self._lock = Lock()
+    if doc.ocrResult is None or status == DocumentStatus.QUEUED:
+        ocr_result = None
+    elif status == DocumentStatus.PENDING_REVIEW:
+        ocr_result = "pending_review"
+    else:
+        ocr_result = OCRResult.model_validate(doc.ocrResult)
+
+    return DocumentResponse(
+        id=UUID(doc.id),
+        status=status,
+        submitted_at=doc.submittedAt.replace(tzinfo=timezone.utc),
+        device_id=doc.deviceId,
+        ocr_result=ocr_result,
+    )
+
+
+class PostgresStore:
+    def __init__(self, db: Prisma) -> None:
+        self._db = db
 
     async def create_document(
         self, *, device_id: str, status: DocumentStatus = DocumentStatus.QUEUED
     ) -> DocumentResponse:
-        doc = DocumentResponse(
-            id=uuid4(),
-            status=status,
-            submitted_at=datetime.now(timezone.utc),
-            device_id=device_id,
+        doc = await self._db.document.create(
+            data={"status": status.value, "deviceId": device_id}
         )
-        with self._lock:
-            self._docs[doc.id] = doc
-        return doc
+        return _to_response(doc)
 
     async def get_document(self, doc_id: UUID) -> DocumentResponse | None:
-        with self._lock:
-            return self._docs.get(doc_id)
+        doc = await self._db.document.find_unique(where={"id": str(doc_id)})
+        return _to_response(doc) if doc is not None else None
 
     async def attach_ocr_result(self, doc_id: UUID, result: OCRResult) -> DocumentResponse:
-        with self._lock:
-            doc = self._docs.get(doc_id)
-            if doc is None:
-                raise KeyError(f"Document {doc_id} not found")
-            new_status = (
-                DocumentStatus.PENDING_REVIEW
-                if result.needs_review
-                else DocumentStatus.COMPLETED
-            )
-            updated = doc.model_copy(update={"ocr_result": result, "status": new_status})
-            self._docs[doc_id] = updated
-            if result.needs_review:
-                self._review_queue[doc_id] = result
-            return updated
+        new_status = (
+            DocumentStatus.PENDING_REVIEW if result.needs_review else DocumentStatus.COMPLETED
+        )
+        doc = await self._db.document.update(
+            where={"id": str(doc_id)},
+            data={
+                "status": new_status.value,
+                "ocrResult": Json(result.model_dump(mode="json")),
+            },
+        )
+        return _to_response(doc)
 
     async def list_review_queue(
         self, *, offset: int = 0, limit: int = 50
     ) -> list[OCRResult]:
-        with self._lock:
-            items = list(self._review_queue.values())
-        return items[offset : offset + limit]
+        docs = await self._db.document.find_many(
+            where={"status": DocumentStatus.PENDING_REVIEW.value},
+            skip=offset,
+            take=limit,
+        )
+        results = []
+        for doc in docs:
+            if doc.ocrResult is not None:
+                results.append(OCRResult.model_validate(doc.ocrResult))
+        return results
 
     async def resolve_review_item(self, doc_id: UUID) -> None:
-        with self._lock:
-            self._review_queue.pop(doc_id, None)
-            doc = self._docs.get(doc_id)
-            if doc is not None:
-                self._docs[doc_id] = doc.model_copy(
-                    update={"status": DocumentStatus.COMPLETED}
-                )
-
-
-# Module-level singleton (the DB epic replaces this with a real connection pool).
-_store = _InMemoryStore()
-
-
-def get_store() -> _InMemoryStore:
-    return _store
+        await self._db.document.update(
+            where={"id": str(doc_id)},
+            data={"status": DocumentStatus.COMPLETED.value},
+        )

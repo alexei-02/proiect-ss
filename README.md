@@ -24,18 +24,32 @@ medical-ocr-platform/
 
 ## Quick start (development)
 
+**Prerequisites:** `docker` (with compose plugin), `openssl`, `curl`
+
+Everything runs in containers. From the repo root:
+
 ```bash
-# 1. Generate dev certs for mTLS
-./scripts/gen-dev-certs.sh
+# First run — generates certs, builds images, creates DB schema, starts all services
+# Note: first OCR build takes 10–15 min (bakes ~500 MB of EasyOCR model weights into the image)
+./start.sh
 
-# 2. Start the stack
-docker compose -f infrastructure/docker/docker-compose.yml up -d
+# Send a test prescription image via MQTT
+./start.sh --test-image
 
-# 3. Run API tests
-cd services/api && pytest
+# Tear down all containers and volumes
+./start.sh --down
+```
 
-# 4. Open the dashboard
-open https://localhost:8443
+Services after startup:
+- API + Swagger UI: `http://localhost:8989/docs`
+- MQTT broker: `localhost:8883` (mTLS only)
+- PostgreSQL: `localhost:5432`
+- Prisma Studio: `cd services/api && DATABASE_URL=postgresql://medical:dev_only_replace_me@localhost:5432/medical_ocr prisma studio --schema prisma/schema.prisma`
+
+Run tests:
+```bash
+cd services/api && pytest -v --cov=app --cov-branch
+cd services/ocr && pytest -v --cov=app --cov-branch
 ```
 
 ## Service responsibilities

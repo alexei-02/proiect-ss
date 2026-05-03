@@ -92,5 +92,11 @@ def get_engine() -> OCREngine | MockOCREngine:
             "easyocr not installed; install via `pip install -e .[ocr]` "
             "or set MOCK_OCR=1 for tests."
         ) from exc
-    reader = easyocr.Reader(["en", "ro"], gpu=False)  # pragma: no cover
+    model_dir = os.environ.get("EASYOCR_MODULE_PATH") or None
+    reader = easyocr.Reader(  # pragma: no cover
+        ["en", "ro"],
+        gpu=False,
+        model_storage_directory=model_dir,
+        user_network_directory="/tmp/user_network",  # /models is read-only at runtime
+    )
     return OCREngine(reader)  # pragma: no cover

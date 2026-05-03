@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     mqtt_topic_image_upload: str = "medical/images/+/upload"
     mqtt_topic_ocr_results: str = "medical/ocr/+/results"
 
+    # Database
+    database_url: str = "postgresql://medical:dev_only_replace_me@postgres:5432/medical_ocr"
+
     # OCR
     ocr_queue_dir: Path = Path("/tmp/ocr-queue")
     ocr_confidence_threshold: float = Field(default=0.95, ge=0.0, le=1.0)

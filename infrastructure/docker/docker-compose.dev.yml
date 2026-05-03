@@ -1,9 +1,8 @@
 ######################################################################
 # Development docker-compose.
 #
-# Brings up: Mosquitto broker (mTLS), API service, OCR worker, and a
-# placeholder Postgres for the DB epic. Volumes share the OCR queue
-# between API and worker until a real message broker is added.
+# Brings up: Mosquitto broker (mTLS), API service, OCR worker, and
+# PostgreSQL. Volumes share the OCR queue between API and worker.
 #
 # Run from the repo root:
 #   ./scripts/gen-dev-certs.sh   # one-time
@@ -41,12 +40,16 @@ services:
       MQTT_TLS_KEY: /certs/api_server.key
       MQTT_CLIENT_ID: api_server
       OCR_QUEUE_DIR: /queue
+      DATABASE_URL: postgresql://medical:dev_only_replace_me@postgres:5432/medical_ocr
     volumes:
       - ../../services/api/app:/app/app:ro
       - ../mosquitto/certs:/certs:ro
       - ocr_queue:/queue
     depends_on:
-      - mosquitto
+      mosquitto:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     networks:
       - frontend
       - mqtt-internal
@@ -55,11 +58,12 @@ services:
   ocr:
     build:
       context: ../../services/ocr
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile.ocr
     restart: unless-stopped
     environment:
       OCR_QUEUE_DIR: /queue
-      MOCK_OCR: "1"  # Set to 0 once easyocr is installed in the image.
+      MOCK_OCR: "0"
+      EASYOCR_MODULE_PATH: /models
     volumes:
       - ocr_queue:/queue
     # ── Sandboxing flags ────────────────────────────────────────────
@@ -77,9 +81,24 @@ services:
     networks:
       - ocr-isolated
 
+  prisma-studio:
+    build:
+      context: ../../services/api
+      dockerfile: Dockerfile.dev
+    entrypoint: ["prisma", "studio", "--schema", "/app/prisma/schema.prisma", "--port", "5555", "--browser", "none"]
+    restart: unless-stopped
+    ports:
+      - "5555:5555"
+    environment:
+      DATABASE_URL: postgresql://medical:dev_only_replace_me@postgres:5432/medical_ocr
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - frontend
+      - api-internal
+
   postgres:
-    # Placeholder for the DB epic. Schema, encryption-at-rest, and
-    # migrations are owned by that team.
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
@@ -92,6 +111,11 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - api-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medical -d medical_ocr"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
   mosquitto_data:
