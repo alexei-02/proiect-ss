@@ -1,0 +1,42 @@
+# OCR worker image with real EasyOCR engine.
+#
+# Models are downloaded during `docker build` (requires internet at build time)
+# and baked into the image at /models. The container has no network egress at
+# runtime — this is intentional for the OCR sandbox security model.
+#
+# Build time: ~10-15 min on first build (downloads ~500 MB of model weights).
+# Subsequent builds reuse the Docker layer cache if pyproject.toml hasn't changed.
+#
+# Use Dockerfile.dev instead if you only need the mock engine (much faster build).
+FROM python:3.11-slim-bookworm
+
+WORKDIR /app
+
+# System libraries required by OpenCV / easyocr
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir -e ".[dev,ocr]"
+
+# Download EasyOCR model weights at build time so the air-gapped container
+# never needs network access at runtime.
+RUN python -c "\
+import easyocr; \
+easyocr.Reader(['en', 'ro'], gpu=False, model_storage_directory='/models', \
+               user_network_directory='/tmp/user_network', \
+               download_enabled=True, verbose=True)"
+
+COPY app ./app
+
+ENV PYTHONUNBUFFERED=1 \
+    MOCK_OCR=0 \
+    OCR_QUEUE_DIR=/queue \
+    EASYOCR_MODULE_PATH=/models
+
+CMD ["python", "-m", "app.worker"]

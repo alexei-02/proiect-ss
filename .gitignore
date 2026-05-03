@@ -40,7 +40,14 @@ build/
 /data/uploads/
 /data/processed/
 
+# EasyOCR model weights (downloaded at runtime, stored in Docker volume)
+.EasyOCR/
+**/easyocr_models/
+
 # Node (frontend)
 node_modules/
 .next/
 .cache/
+
+# Claude
+.claude/

@@ -1,0 +1,32 @@
+[project]
+name = "medical-ocr-worker"
+version = "0.1.0"
+description = "Sandboxed OCR worker — extracts structured fields from medical images"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.8.0",
+    "pydantic-settings>=2.4.0",
+    "pillow>=10.4.0",
+    # easyocr is heavy and platform-dependent; pin to a version we test on.
+    # Comment out for unit-test-only environments.
+    # "easyocr>=1.7.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.6.0",
+]
+ocr = [
+    "easyocr>=1.7.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["app"]
+branch = true

@@ -1,0 +1,137 @@
+######################################################################
+# Development docker-compose.
+#
+# Brings up: Mosquitto broker (mTLS), API service, OCR worker, and
+# PostgreSQL. Volumes share the OCR queue between API and worker.
+#
+# Run from the repo root:
+#   ./scripts/gen-dev-certs.sh   # one-time
+#   docker compose -f infrastructure/docker/docker-compose.dev.yml up
+######################################################################
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    restart: unless-stopped
+    ports:
+      - "8883:8883"
+    volumes:
+      - ../mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../mosquitto/acl.conf:/mosquitto/config/acl.conf:ro
+      - ../mosquitto/certs:/mosquitto/certs:ro
+      - mosquitto_data:/mosquitto/data
+    networks:
+      - frontend
+      - mqtt-internal
+
+  api:
+    build:
+      context: ../../services/api
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    ports:
+      - "8989:8989"
+    environment:
+      ENV: development
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 8883
+      MQTT_TLS_CA: /certs/ca.crt
+      MQTT_TLS_CERT: /certs/api_server.crt
+      MQTT_TLS_KEY: /certs/api_server.key
+      MQTT_CLIENT_ID: api_server
+      OCR_QUEUE_DIR: /queue
+      DATABASE_URL: postgresql://medical:dev_only_replace_me@postgres:5432/medical_ocr
+    volumes:
+      - ../../services/api/app:/app/app:ro
+      - ../mosquitto/certs:/certs:ro
+      - ocr_queue:/queue
+    depends_on:
+      mosquitto:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    networks:
+      - frontend
+      - mqtt-internal
+      - api-internal
+
+  ocr:
+    build:
+      context: ../../services/ocr
+      dockerfile: Dockerfile.ocr
+    restart: unless-stopped
+    environment:
+      OCR_QUEUE_DIR: /queue
+      MOCK_OCR: "0"
+      EASYOCR_MODULE_PATH: /models
+    volumes:
+      - ocr_queue:/queue
+    # ── Sandboxing flags ────────────────────────────────────────────
+    # Even in dev we apply the production-grade isolation. Removing any
+    # of these for "convenience" is a regression — discuss in PR review.
+    read_only: true
+    tmpfs:
+      - /tmp:size=100m,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # No network — the worker only touches the shared volume. If you
+    # need to debug, override with `network_mode: bridge` locally.
+    networks:
+      - ocr-isolated
+
+  prisma-studio:
+    build:
+      context: ../../services/api
+      dockerfile: Dockerfile.dev
+    entrypoint: ["prisma", "studio", "--schema", "/app/prisma/schema.prisma", "--port", "5555", "--browser", "none"]
+    restart: unless-stopped
+    ports:
+      - "5555:5555"
+    environment:
+      DATABASE_URL: postgresql://medical:dev_only_replace_me@postgres:5432/medical_ocr
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - frontend
+      - api-internal
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: medical
+      POSTGRES_PASSWORD: dev_only_replace_me
+      POSTGRES_DB: medical_ocr
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - api-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medical -d medical_ocr"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mosquitto_data:
+  ocr_queue:
+  postgres_data:
+
+networks:
+  frontend:
+    # External-facing services (API HTTP, MQTT TLS).
+  mqtt-internal:
+    # Mosquitto <-> API only.
+    internal: true
+  api-internal:
+    # API <-> Postgres only.
+    internal: true
+  ocr-isolated:
+    # OCR has its own network with no route to anything else. The shared
+    # volume is the only IPC channel.
+    internal: true
