@@ -58,15 +58,15 @@ cd services/ocr && pytest -v --cov=app --cov-branch
 
 | Component | Owner | Status |
 |---------|-------|--------|
-| Data Ingestion & APIs | Andrei Alexei | ⏳ |
-| OCR Processing Engine | Andrei Alexei | ⏳ |
+| Data Ingestion & APIs | Andrei Alexei | ✅ |
+| OCR Processing Engine | Andrei Alexei | ✅ |
 | Database & Storage | Saleem Al-Bouri | ⏳ |
 | Access Control & Auth | Saleem Al-Bouri | ⏳
-| Reporting & Dashboard | TBD | ⏳ |
+| Reporting & Dashboard | Alexandru Vidu | ⏳ |
 | Embedded / Mobile Client | TBD | ⏳ |
 | CI/CD Pipeline & Governance | TBD | ⏳ |
 | AI-Assisted CI/CD (optional arch) | TBD | ⏳ |
-| Infrastructure & DevOps | TBD | ⏳ |
+| Infrastructure & DevOps | Alexandru Vidu | ⏳ |
 
 ### Data Ingestion & APIs
 
