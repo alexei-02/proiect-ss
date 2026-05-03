@@ -44,3 +44,6 @@ build/
 node_modules/
 .next/
 .cache/
+
+# Claude
+.claude/

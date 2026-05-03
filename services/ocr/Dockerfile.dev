@@ -1,0 +1,16 @@
+# Development image — keeps a shell for debugging. NOT for production.
+FROM python:3.11-slim-bookworm
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+# Use the mock OCR by default in dev to avoid pulling torch.
+RUN pip install --no-cache-dir -e ".[dev]"
+
+COPY app ./app
+
+ENV PYTHONUNBUFFERED=1 \
+    MOCK_OCR=1 \
+    OCR_QUEUE_DIR=/queue
+
+CMD ["python", "-m", "app.worker"]
