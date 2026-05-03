@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Secrets / certs
+*.pem
+*.key
+*.crt
+*.p12
+!**/test/**/*.crt
+!**/test/**/*.key
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+*.tar.gz
+
+# OCR outputs (local dev)
+/data/uploads/
+/data/processed/
+
+# Node (frontend)
+node_modules/
+.next/
+.cache/
