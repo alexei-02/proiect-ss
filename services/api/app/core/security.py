@@ -1,35 +1,35 @@
 """
 Authentication & RBAC.
 
-THIS IS A STUB. The Auth epic owner replaces the body of these functions
-with real JWT verification, but the public interface (function names,
-arguments, return types, exceptions raised) MUST stay the same so the
-route handlers don't change.
+Public interface (signatures are fixed — routes depend on them):
+  - User dataclass
+  - get_current_user(request) -> User
+  - require_role(role)        -> FastAPI dependency (single-role back-compat alias)
+  - require_any_role(*roles)  -> FastAPI dependency (passes if user has ANY of the roles)
 
-Contract for the Auth epic implementer:
----------------------------------------
-1. `get_current_user(request)`:
-     - Read the Authorization header (Bearer <token>).
-     - Verify JWT signature with the configured public key / secret.
-     - Decode claims, raise HTTPException(401) on any failure.
-     - Return a User object populated from the JWT claims.
+Behaviour:
+  - Reads Authorization: Bearer <token> header.
+  - Verifies JWT (HS256 in dev, RS256 in prod — algorithm from settings).
+  - Checks per-user is_active kill switch (cached 30 s in process memory).
+  - Dev bypass: when env != "production" AND dev_auth_bypass=true AND no Authorization
+    header, returns a fake admin+doctor user so local dev works without tokens.
 
-2. `require_role(role)`:
-     - Returns a FastAPI dependency.
-     - The dependency calls get_current_user, then raises HTTPException(403)
-       if `role` is not in user.roles.
-
-Roles in use (from the RBAC matrix in docs/RBAC.md):
-    - admin        — full access, system management
-    - doctor       — read/write patient data, resolve review queue
-    - receptionist — upload documents, read patient data
-    - auditor      — read-only access to anonymized data + metrics
+Roles: admin | doctor | receptionist | auditor  (see docs/RBAC.md)
 """
 
+import logging
 from dataclasses import dataclass, field
+from time import monotonic
 from typing import Callable
 
+import jwt
 from fastapi import HTTPException, Request, status
+
+logger = logging.getLogger(__name__)
+
+# Per-user is_active cache: user_id -> (is_active, cached_at_monotonic)
+_ACTIVE_CACHE: dict[str, tuple[bool, float]] = {}
+_CACHE_TTL = 30.0  # seconds
 
 
 @dataclass
@@ -39,32 +39,102 @@ class User:
     roles: list[str] = field(default_factory=list)
 
 
-# ─── Stub: returns a fake user for development only ────────────────────
-# Auth epic: REPLACE THIS with real JWT verification.
 async def get_current_user(request: Request) -> User:
-    """Stub auth — returns a hardcoded admin in development.
+    from app.core.config import get_settings
+    from app.core.jwt_utils import decode_token
 
-    In production this MUST verify the JWT and extract the real claims.
-    """
-    # TODO(auth-epic): replace with real JWT verification.
-    if request.app.state.settings.env != "development":
+    settings = get_settings()
+
+    # Dev/test bypass — never allowed in production.
+    if (
+        settings.env != "production"
+        and settings.dev_auth_bypass
+        and "Authorization" not in request.headers
+    ):
+        user = User(id="dev-user", username="dev", roles=["admin", "doctor"])
+        request.state.user = user
+        return user
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Auth not implemented for non-dev environments",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    return User(id="dev-user", username="dev", roles=["admin", "doctor"])
+
+    token = auth_header[7:]
+    try:
+        payload = decode_token(token, "access")
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except jwt.PyJWTError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: {exc}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user_id: str = payload["sub"]
+
+    # is_active kill switch (30 s cache)
+    now = monotonic()
+    cached = _ACTIVE_CACHE.get(user_id)
+    if cached is None or now - cached[1] > _CACHE_TTL:
+        is_active = await _fetch_is_active(request, user_id)
+        _ACTIVE_CACHE[user_id] = (is_active, now)
+    else:
+        is_active = cached[0]
+
+    if not is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account deactivated",
+        )
+
+    user = User(
+        id=user_id,
+        username=payload.get("username", ""),
+        roles=payload.get("roles", []),
+    )
+    request.state.user = user
+    return user
 
 
-def require_role(role: str) -> Callable:
-    """Dependency factory — enforces that the current user has `role`."""
+async def _fetch_is_active(request: Request, user_id: str) -> bool:
+    app_state = getattr(getattr(request, "app", None), "state", None)
+    if app_state is None:
+        return True
+    user_store = getattr(app_state, "user_store", None)
+    if user_store is None:
+        return True
+    try:
+        row = await user_store.get_by_id(user_id)
+        return row is not None and row["is_active"]
+    except Exception as exc:
+        logger.warning("is_active check failed for %s: %s", user_id, exc)
+        return True  # fail open to avoid locking out users on DB hiccup
+
+
+def require_any_role(*roles: str) -> Callable:
+    """Dependency factory — passes if the current user has ANY of the listed roles."""
 
     async def dependency(request: Request) -> User:
         user = await get_current_user(request)
-        if role not in user.roles:
+        if not any(r in user.roles for r in roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Role '{role}' required",
+                detail=f"One of roles {list(roles)} required",
             )
         return user
 
     return dependency
+
+
+def require_role(role: str) -> Callable:
+    """Single-role dependency factory — back-compat alias for require_any_role."""
+    return require_any_role(role)

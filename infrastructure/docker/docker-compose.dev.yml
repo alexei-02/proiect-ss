@@ -41,6 +41,21 @@ services:
       MQTT_CLIENT_ID: api_server
       OCR_QUEUE_DIR: /queue
       DATABASE_URL: postgresql://medical:dev_only_replace_me@postgres:5432/medical_ocr
+      # JWT — replace with a long random secret before any real data enters the system
+      JWT_SECRET: "dev-jwt-secret-replace-before-real-data-minimum-32-chars-long"
+      JWT_ALGORITHM: "HS256"
+      JWT_AUDIENCE: "medical-ocr-api"
+      JWT_ISSUER: "medical-ocr-api"
+      JWT_ACCESS_TTL_SECONDS: "900"
+      JWT_REFRESH_TTL_SECONDS: "604800"
+      # PHI encryption key — 64 hex chars (32 bytes).  Replace before real data.
+      PHI_MASTER_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      # Auth bypass — allows unauthenticated requests in dev (returns fake admin user).
+      # Set to false to exercise the real JWT path locally.
+      DEV_AUTH_BYPASS: "false"
+      # Initial admin seeded by entrypoint.sh on first run
+      INITIAL_ADMIN_USERNAME: "admin"
+      INITIAL_ADMIN_PASSWORD: "dev_admin_replace_me"
     volumes:
       - ../../services/api/app:/app/app:ro
       - ../mosquitto/certs:/certs:ro

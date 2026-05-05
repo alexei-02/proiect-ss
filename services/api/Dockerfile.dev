@@ -14,6 +14,7 @@ COPY prisma ./prisma
 RUN prisma generate --schema /app/prisma/schema.prisma
 
 COPY app ./app
+COPY scripts ./scripts
 COPY entrypoint.sh ./entrypoint.sh
 RUN chmod +x entrypoint.sh
 
