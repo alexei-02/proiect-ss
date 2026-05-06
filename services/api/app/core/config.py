@@ -3,7 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -44,6 +44,38 @@ class Settings(BaseSettings):
     # OCR
     ocr_queue_dir: Path = Path("/tmp/ocr-queue")
     ocr_confidence_threshold: float = Field(default=0.95, ge=0.0, le=1.0)
+
+    # JWT
+    jwt_secret: str = "change-me-in-production-use-a-long-random-secret"
+    jwt_algorithm: str = "HS256"
+    jwt_audience: str = "medical-ocr-api"
+    jwt_issuer: str = "medical-ocr-api"
+    jwt_access_ttl_seconds: int = 900   # 15 minutes
+    jwt_refresh_ttl_seconds: int = 604800  # 7 days
+
+    # PHI encryption — 64 hex chars = 32 bytes (AES-256 key)
+    phi_master_key: str = "0" * 64  # overridden by env; dev default is zeroes
+
+    # Auth behaviour
+    dev_auth_bypass: bool = False
+    initial_admin_username: str = ""
+    initial_admin_password: str = ""
+
+    @field_validator("phi_master_key")
+    @classmethod
+    def _validate_phi_key(cls, v: str) -> str:
+        if len(v) != 64:
+            raise ValueError("PHI_MASTER_KEY must be 64 hex characters (32 bytes)")
+        bytes.fromhex(v)  # raises ValueError if not valid hex
+        return v
+
+    @field_validator("dev_auth_bypass")
+    @classmethod
+    def _guard_bypass_in_prod(cls, v: bool, info) -> bool:
+        env = (info.data or {}).get("env", "development")
+        if v and env == "production":
+            raise ValueError("DEV_AUTH_BYPASS must not be enabled in production")
+        return v
 
 
 @lru_cache

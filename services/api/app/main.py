@@ -4,10 +4,16 @@ Wires up:
     - Settings
     - Body-size middleware (DoS defense layer 1)
     - Rate limiter (DoS defense layer 2)
-    - Routers (health, documents, review, metrics)
+    - Audit middleware (PHI-touching request logging)
+    - Routers: health, documents, review, metrics, auth, audit-log
     - Prisma database connection
+    - PhiCipher (AES-256-GCM for PHI fields)
+    - UserStore, RefreshTokenStore, PrismaAuditSink
+    - PostgresStore (with cipher + audit sink)
     - MQTT consumer (started during lifespan)
     - Result poller (reads OCR result files, writes to DB)
+    - Hourly refresh-token cleanup task
+    - Production TLS startup guard
 """
 
 import asyncio
@@ -22,16 +28,32 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from app.api.routes import documents, health, metrics, review
+from app.api.routes import audit_log, auth, documents, health, metrics, review
+from app.core.audit import AuditMiddleware, PrismaAuditSink
 from app.core.config import get_settings
+from app.core.crypto import EnvKeyProvider, PhiCipher
 from app.core.limiter import limiter
 from app.core.middleware import BodySizeLimitMiddleware
 from app.mqtt.consumer import MQTTConsumer
 from app.services.ocr_client import OCRClient
+from app.services.refresh_tokens import RefreshTokenStore
 from app.services.result_poller import poll_results
 from app.services.storage import PostgresStore
+from app.services.users import UserStore
 
 logger = logging.getLogger(__name__)
+
+
+async def _cleanup_refresh_tokens(rt_store: RefreshTokenStore) -> None:
+    """Hourly background task: delete expired refresh token rows."""
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            deleted = await rt_store.cleanup_expired()
+            if deleted:
+                logger.info("Cleaned up %d expired refresh tokens", deleted)
+        except Exception as exc:  # pragma: no cover
+            logger.error("Refresh token cleanup failed: %s", exc)
 
 
 @asynccontextmanager
@@ -39,16 +61,39 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     app.state.settings = settings
 
+    # Production TLS guard — refuse to start without sslmode on the DSN.
+    if settings.env == "production" and "sslmode=" not in settings.database_url:
+        raise RuntimeError(
+            "Production deployment requires sslmode=verify-full in DATABASE_URL"
+        )
+
     # Database
     db = Prisma()
     await db.connect()
-    store = PostgresStore(db)
+    app.state.db = db  # exposed for audit-log route
+
+    # PHI encryption
+    provider = EnvKeyProvider(settings.phi_master_key)
+    cipher = PhiCipher(provider)
+
+    # Dependent services
+    audit_sink = PrismaAuditSink(db)
+    user_store = UserStore(db)
+    rt_store = RefreshTokenStore(db)
+    store = PostgresStore(db, cipher=cipher, audit_sink=audit_sink)
+
+    app.state.audit_sink = audit_sink
+    app.state.user_store = user_store
+    app.state.rt_store = rt_store
     app.state.store = store
 
     # OCR client + result poller
     ocr_client = OCRClient(settings.ocr_queue_dir)
     app.state.ocr_client = ocr_client
     poller_task = asyncio.create_task(poll_results(settings.ocr_queue_dir, store))
+
+    # Hourly refresh token cleanup
+    cleanup_task = asyncio.create_task(_cleanup_refresh_tokens(rt_store))
 
     # MQTT consumer
     consumer: MQTTConsumer | None = None
@@ -63,11 +108,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
+    cleanup_task.cancel()
     poller_task.cancel()
-    try:
-        await poller_task
-    except asyncio.CancelledError:
-        pass
+    for task in (cleanup_task, poller_task):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     if consumer is not None:
         await consumer.stop()
@@ -91,6 +138,7 @@ def create_app() -> FastAPI:
         max_upload=settings.max_upload_size_bytes,
         max_json=settings.max_json_body_bytes,
     )
+    app.add_middleware(AuditMiddleware)
     app.state.limiter = limiter
     app.add_middleware(SlowAPIMiddleware)
 
@@ -99,9 +147,11 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=429, content={"detail": str(exc.detail)})
 
     app.include_router(health.router)
+    app.include_router(auth.router)
     app.include_router(documents.router)
     app.include_router(review.router)
     app.include_router(metrics.router)
+    app.include_router(audit_log.router)
 
     return app
 

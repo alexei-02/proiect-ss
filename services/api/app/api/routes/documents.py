@@ -5,8 +5,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 
 from app.core.limiter import limiter
-from app.core.security import User, require_role
+from app.core.security import User, require_any_role
 from app.schemas.ocr import DocumentResponse
+from app.services.masking import mask_phi
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
@@ -15,7 +16,7 @@ router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
     "",
     response_model=DocumentResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(require_role("doctor"))],
+    dependencies=[Depends(require_any_role("admin", "doctor", "receptionist"))],
 )
 @limiter.limit("3/minute")
 async def upload_document(
@@ -55,16 +56,21 @@ async def upload_document(
 @router.get(
     "/{doc_id}",
     response_model=DocumentResponse,
-    dependencies=[Depends(require_role("doctor"))],
 )
 @limiter.limit("100/minute")
 async def get_document(
     request: Request,
     doc_id: UUID,
-    _user: User = Depends(require_role("doctor")),
+    _user: User = Depends(require_any_role("admin", "doctor", "receptionist", "auditor")),
 ) -> DocumentResponse:
     store = request.app.state.store
     doc = await store.get_document(doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    # Auditor-only callers receive PHI masked — full access for clinical roles.
+    clinical_roles = {"admin", "doctor", "receptionist"}
+    if not any(r in _user.roles for r in clinical_roles):
+        doc = mask_phi(doc)
+
     return doc

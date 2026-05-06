@@ -16,5 +16,59 @@ model Document {
   deviceId    String   @map("device_id")
   ocrResult   Json?    @map("ocr_result")
 
+  @@index([status, submittedAt], name: "documents_status_submitted_at_idx")
+  @@index([deviceId], name: "documents_device_id_idx")
   @@map("documents")
+}
+
+model User {
+  id            String         @id @default(uuid()) @db.Uuid
+  username      String         @unique
+  passwordHash  String         @map("password_hash")
+  roles         String[]
+  isActive      Boolean        @default(true) @map("is_active")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  lastLoginAt   DateTime?      @map("last_login_at")
+  refreshTokens RefreshToken[]
+  auditLogs     AuditLog[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  jti       String    @unique
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  userAgent String?   @map("user_agent")
+  ipAddress String?   @map("ip_address")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], name: "refresh_tokens_user_id_idx")
+  @@index([expiresAt], name: "refresh_tokens_expires_at_idx")
+  @@map("refresh_tokens")
+}
+
+model AuditLog {
+  id           BigInt   @id @default(autoincrement())
+  occurredAt   DateTime @default(now()) @map("occurred_at")
+  userId       String?  @map("user_id") @db.Uuid
+  username     String?
+  action       String
+  resourceType String?  @map("resource_type")
+  resourceId   String?  @map("resource_id")
+  ipAddress    String?  @map("ip_address")
+  userAgent    String?  @map("user_agent")
+  outcome      String
+  metadata     Json?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([occurredAt], name: "audit_logs_occurred_at_idx")
+  @@index([userId, occurredAt], name: "audit_logs_user_id_occurred_at_idx")
+  @@index([action, occurredAt], name: "audit_logs_action_occurred_at_idx")
+  @@index([resourceType, resourceId], name: "audit_logs_resource_type_resource_id_idx")
+  @@map("audit_logs")
 }

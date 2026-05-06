@@ -7,33 +7,30 @@ Secure web platform for processing medical documents via MQTT and OCR, with PHI 
 ```
 medical-ocr-platform/
 ├── services/
-│   ├── api/              # REST API + MQTT consumer (FastAPI) — Data Ingestion epic
-│   ├── ocr/              # OCR worker, sandboxed (EasyOCR)    — OCR Processing epic
+│   ├── api/              # REST API + MQTT consumer (FastAPI)
+│   ├── ocr/              # OCR worker, sandboxed (EasyOCR)
 │   └── web/              # Frontend dashboard (assigned)
 ├── infrastructure/
 │   ├── mosquitto/        # MQTT broker config + ACL + certs
 │   ├── nginx/            # Reverse proxy / TLS termination
-│   ├── postgres/         # DB init scripts, schema migrations
-│   └── docker/           # Shared base images, compose files
-├── ci/
-│   ├── policies/         # Security gate policies, RBAC for AI agents
-│   └── scanners/         # SAST/DAST configs, SBOM tooling
+│   └── docker/           # Compose files
 ├── docs/                 # Architecture, TARA, API reference
 └── scripts/              # Dev tooling, cert generation, seed data
 ```
+
+---
 
 ## Quick start (development)
 
 **Prerequisites:** `docker` (with compose plugin), `openssl`, `curl`
 
-Everything runs in containers. From the repo root:
-
 ```bash
-# First run — generates certs, builds images, creates DB schema, starts all services
-# Note: first OCR build takes 10–15 min (bakes ~500 MB of EasyOCR model weights into the image)
+# First run — generates mTLS certs, builds images, runs DB migrations,
+# seeds the initial admin user, and waits for the API to be healthy.
+# Note: first OCR build takes 10–15 min (downloads ~500 MB EasyOCR models).
 ./start.sh
 
-# Send a test prescription image via MQTT
+# Start + send a sample prescription via MQTT after startup
 ./start.sh --test-image
 
 # Tear down all containers and volumes
@@ -41,126 +38,240 @@ Everything runs in containers. From the repo root:
 ```
 
 Services after startup:
-- API + Swagger UI: `http://localhost:8989/docs`
-- MQTT broker: `localhost:8883` (mTLS only)
-- PostgreSQL: `localhost:5432`
-- Prisma Studio: `cd services/api && DATABASE_URL=postgresql://medical:dev_only_replace_me@localhost:5432/medical_ocr prisma studio --schema prisma/schema.prisma`
 
-Run tests:
+| Service | URL |
+|---|---|
+| API + Swagger UI | `http://localhost:8989/docs` |
+| MQTT broker | `localhost:8883` (mTLS only) |
+| PostgreSQL | `localhost:5432` |
+| Prisma Studio | `http://localhost:5555` |
+
+---
+
+## Authentication
+
+All API routes (except `/health`, `/ready`, and the auth endpoints) require a **Bearer token**.
+
+### Get a token
+
 ```bash
-cd services/api && pytest -v --cov=app --cov-branch
-cd services/ocr && pytest -v --cov=app --cov-branch
+curl -s -X POST http://localhost:8989/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"dev_admin_replace_me"}' | jq .
 ```
+
+Response:
+
+```json
+{
+  "access_token": "<jwt>",
+  "refresh_token": "<opaque>",
+  "token_type": "Bearer",
+  "expires_in": 900
+}
+```
+
+Use the `access_token` in subsequent requests:
+
+```bash
+export TOKEN="<access_token>"
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8989/api/v1/auth/me
+```
+
+### Refresh and logout
+
+```bash
+# Rotate the refresh token (old token is revoked, new pair issued)
+curl -s -X POST http://localhost:8989/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"<refresh_token>"}'
+
+# Revoke one token
+curl -X POST http://localhost:8989/api/v1/auth/logout \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"<refresh_token>"}'
+
+# Revoke all tokens for this user
+curl -X POST http://localhost:8989/api/v1/auth/logout \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+### Dev auth bypass
+
+Set `DEV_AUTH_BYPASS=true` in the `api` service environment (already done in
+`docker-compose.dev.yml`) to skip token verification when **no** `Authorization`
+header is present. Requests without a header are treated as the built-in
+`admin+doctor` dev user. This is **never** allowed when `ENV=production`.
+
+---
+
+## Roles & access
+
+| Role | What they can do |
+|---|---|
+| `admin` | Full access to all endpoints |
+| `doctor` | Upload documents, read documents (with PHI), manage review queue |
+| `receptionist` | Upload and read documents |
+| `auditor` | Read documents (PHI masked), view metrics, view audit log (IP masked to /24) |
+
+Full matrix: see [docs/DATABASE_AND_RBAC.md](docs/DATABASE_AND_RBAC.md).
+
+---
+
+## API endpoints
+
+### Auth
+| Method | Path | Roles | Description |
+|---|---|---|---|
+| `POST` | `/api/v1/auth/login` | public | Exchange credentials for token pair |
+| `POST` | `/api/v1/auth/refresh` | public | Rotate refresh token |
+| `POST` | `/api/v1/auth/logout` | authenticated | Revoke token(s) |
+| `GET` | `/api/v1/auth/me` | authenticated | Current user info |
+
+### Documents
+| Method | Path | Roles | Description |
+|---|---|---|---|
+| `POST` | `/api/v1/documents` | admin, doctor, receptionist | Upload a prescription image |
+| `GET` | `/api/v1/documents/{id}` | all | Fetch document + OCR result (PHI masked for auditor) |
+
+### Review queue
+| Method | Path | Roles | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/review-queue` | admin, doctor | List items below confidence threshold |
+| `POST` | `/api/v1/review-queue/{id}/resolve` | admin, doctor | Mark a review item as resolved |
+
+### Metrics & audit
+| Method | Path | Roles | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/metrics/ocr` | admin, auditor | OCR performance metrics |
+| `GET` | `/api/v1/audit-log` | admin, auditor | Paginated PHI-access audit log |
+
+### Health
+| Method | Path | Roles | Description |
+|---|---|---|---|
+| `GET` | `/health` | public | Liveness check |
+| `GET` | `/ready` | public | Readiness check |
+
+Full interactive docs: `http://localhost:8989/docs`
+
+---
+
+## Running tests
+
+Tests use a mocked Prisma client — no running database required.
+
+```bash
+# API service
+cd services/api
+pip install -e ".[dev]"
+pytest -v --cov=app --cov-branch
+
+# OCR worker
+cd services/ocr
+pip install -e ".[dev]"
+pytest -v --cov=app --cov-branch
+
+# Single file
+cd services/api && pytest tests/test_crypto.py -v
+```
+
+Coverage thresholds: **≥ 80% branch** overall; `app/core/security.py` and `app/core/crypto.py` target **100%**.
+
+---
+
+## Sending a test image via MQTT
+
+```bash
+python scripts/send_test_image.py \
+  --device device_dev_001 \
+  --file services/ocr/tests/fixtures/sample_prescription_01.png \
+  --cert infrastructure/mosquitto/certs/device_dev_001.crt \
+  --key  infrastructure/mosquitto/certs/device_dev_001.key \
+  --ca   infrastructure/mosquitto/certs/ca.crt
+```
+
+---
+
+## Prisma (database)
+
+```bash
+# Browse the database (http://localhost:5555)
+cd services/api
+DATABASE_URL=postgresql://medical:dev_only_replace_me@localhost:5432/medical_ocr \
+  prisma studio --schema prisma/schema.prisma
+
+# Create a new migration after schema changes
+docker exec $(docker compose -f infrastructure/docker/docker-compose.dev.yml ps -q api) sh -c \
+  "DATABASE_URL=postgresql://medical:dev_only_replace_me@postgres:5432/medical_ocr \
+   prisma migrate dev --name <migration_name> --schema /app/prisma/schema.prisma --skip-generate"
+# Then copy back to host:
+docker cp <container_id>:/app/prisma/migrations ./services/api/prisma/migrations
+```
+
+---
+
+## Key environment variables (api service)
+
+| Variable | Dev default | Description |
+|---|---|---|
+| `JWT_SECRET` | `dev-jwt-secret-…` | HMAC signing secret — **replace before real data** |
+| `PHI_MASTER_KEY` | `000…001` (64 hex chars) | AES-256 key for PHI encryption — **replace before real data** |
+| `DEV_AUTH_BYPASS` | `false` | `true` skips auth when no `Authorization` header is present |
+| `INITIAL_ADMIN_USERNAME` | `admin` | Seeded on first container start |
+| `INITIAL_ADMIN_PASSWORD` | `dev_admin_replace_me` | Seeded on first container start |
+| `DATABASE_URL` | `postgresql://medical:…@postgres:5432/medical_ocr` | Postgres DSN |
+| `ENV` | `development` | `development` / `test` / `production` |
+
+> **⚠️ Before handling any real PHI:** rotate `JWT_SECRET` and `PHI_MASTER_KEY` to
+> cryptographically random values. See [docs/runbooks/phi_key_rotation.md](docs/runbooks/phi_key_rotation.md).
+
+---
+
+## Individual service rebuild
+
+```bash
+docker compose -f infrastructure/docker/docker-compose.dev.yml up --build -d api
+docker compose -f infrastructure/docker/docker-compose.dev.yml logs -f api
+docker compose -f infrastructure/docker/docker-compose.dev.yml logs -f ocr
+```
+
+---
+
+## Linting
+
+```bash
+cd services/api && ruff check app/ && ruff format --check app/
+cd services/ocr && ruff check app/ && ruff format --check app/
+```
+
+---
 
 ## Service responsibilities
 
-### Summary
-
 | Component | Owner | Status |
-|---------|-------|--------|
+|---|---|:---:|
 | Data Ingestion & APIs | Andrei Alexei | ✅ |
 | OCR Processing Engine | Andrei Alexei | ✅ |
-| Database & Storage | Saleem Al-Bouri | ⏳ |
-| Access Control & Auth | Saleem Al-Bouri | ⏳
+| Database & Storage | Saleem Al-Bouri | ✅ |
+| Access Control & Auth | Saleem Al-Bouri | ✅ |
 | Reporting & Dashboard | Alexandru Vidu | ⏳ |
 | Embedded / Mobile Client | TBD | ⏳ |
 | CI/CD Pipeline & Governance | TBD | ⏳ |
 | AI-Assisted CI/CD (optional arch) | TBD | ⏳ |
 | Infrastructure & DevOps | Alexandru Vidu | ⏳ |
 
-### Data Ingestion & APIs
-
-| # | Task | Description | Tags | Effort |
-|---|------|-------------|------|:------:|
-| t1 | Set up MQTT broker (Mosquitto) | TLS/mTLS, rate limiting, payload size limits for DoS prevention | backend, security | M |
-| t2 | Implement REST/GraphQL API layer | Authenticated endpoints for frontend; input validation on all routes | backend | M |
-| t3 | API rate limiting & DoS protection middleware | Token bucket or sliding window; configurable per route | backend, security | S |
-| t4 | MQTT topic ACL configuration | Per-role topic permissions, client certificate validation | backend, security | S |
-
-### OCR Processing Engine
-
-| # | Task | Description | Tags | Effort |
-|---|------|-------------|------|:------:|
-| t5 | Integrate OCR engine (EasyOCR or DeepSeek) | Dockerized, distroless or gVisor sandbox; no root privileges | ml, security | L |
-| t6 | Define structured JSON output schema | Fields: PatientName, Medication, ExpiryDate, confidence scores per field | ml, backend | S |
-| t7 | Confidence thresholding logic | Flag any field below 95% confidence for manual review queue | ml, backend | S |
-| t8 | OCR sandbox isolation | Distroless container or gVisor runtime; block network egress from OCR process | security, infra | M |
-| t9 | Malicious image handling & fuzzing | Reject corrupt/oversized inputs; integrate API fuzzer in pipeline | security, ml | M |
-
-### Database & Storage
-
-| # | Task | Description | Tags | Effort |
-|---|------|-------------|------|:------:|
-| t10 | PostgreSQL schema design | Tables: patients, documents, ocr_results, review_queue, users, roles | backend | M |
-| t11 | PHI encryption at rest | Column-level encryption for sensitive fields; key management (e.g. Vault, KMS) | security, backend | L |
-| t12 | TLS on all internal service connections | DB ↔ API, API ↔ OCR; mTLS preferred; certificate rotation plan | security, infra | M |
-| t13 | Database migration tooling | Alembic or Flyway; versioned, reversible migrations | backend, infra | S |
-
-### Access Control & Auth
-
-| # | Task | Description | Tags | Effort |
-|---|------|-------------|------|:------:|
-| t14 | RBAC model design | Roles: admin, doctor, receptionist, auditor; permissions matrix document | security, backend | M |
-| t15 | JWT or session-based authentication | Short-lived tokens, refresh flow, revocation list | security, backend | M |
-| t16 | RBAC enforcement middleware | Every API route checks role; deny by default | security, backend | M |
-| t17 | Audit log for all PHI access | Immutable append-only log: who, what, when, from where | security, backend | M |
-
-### Reporting & Dashboard
-
-| # | Task | Description | Tags | Effort |
-|---|------|-------------|------|:------:|
-| t18 | Dynamic report generator | Pluggable report types; async generation for large datasets | backend | L |
-| t19 | Compliance / expiry alerts | Daily cron: workers expiring next 30 days, overdue renewals | backend | M |
-| t20 | Anonymised dataset export | Auto-mask PHI fields; only available to auditor/research roles | backend, security | M |
-| t21 | System performance metrics | OCR latency p50/p95, success rate, queue depth; expose via API | backend, infra | S |
-| t22 | Frontend dashboard UI | Review queue, report viewer, alert list, role-based views | frontend | L |
-
-### Embedded / Mobile Client
-
-| # | Task | Description | Tags | Effort |
-|---|------|-------------|------|:------:|
-| t23 | Mobile camera capture flow | iOS/Android or PWA; document framing UX, image pre-validation | embedded, frontend | M |
-| t24 | MQTT client with mTLS | paho-mqtt or equiv; device certificate provisioning flow | embedded, security | M |
-| t25 | Offline mode & local storage | SD/flash queue when server unreachable; auto-retry on reconnect | embedded | M |
-| t26 | OTA firmware update mechanism (bonus) | Triggered via MQTT message or HTTP endpoint; signed firmware bundles | embedded, security | L |
-
-### CI/CD Pipeline & Governance
-
-| # | Task | Description | Tags | Effort |
-|---|------|-------------|------|:------:|
-| t27 | SCM setup & branch protection | GitHub/GitLab; main branch requires PR + review + green pipeline | cicd | S |
-| t28 | Unit test suite (100% branch coverage on security boundaries) | Auth, RBAC, OCR confidence gating, encryption paths | cicd, security | L |
-| t29 | SAST integration (static analysis) | Bandit/Semgrep; SARIF export; pipeline fails on new findings | cicd, security | M |
-| t30 | DAST & API fuzzer integration | OWASP ZAP or Nuclei; run against staging; results to central dashboard | cicd, security | M |
-| t31 | Security gateway (no-merge policy enforcement) | Pipeline gate: all scans green + human approval before merge to main | cicd, security | M |
-| t32 | SBOM generation at build time | CycloneDX or SPDX; auto-attached to every release artifact | cicd, infra | S |
-| t33 | Immutable audit archive | All AI prompts, decisions, tool calls, test evidence stored append-only | cicd, security | M |
-
-### AI-Assisted CI/CD (optional arch)
-
-| # | Task | Description | Tags | Effort |
-|---|------|-------------|------|:------:|
-| t34 | AI orchestrator & agent swarm setup | Agents propose code/PRs only; no autonomous deployment permission | cicd, infra | L |
-| t35 | MCP capability gateway & allowlist | Restrict which CI tools agents can invoke; RBAC for agent actions | cicd, security | L |
-| t36 | Outbound quarantine sandbox for AI-generated code | Run & test AI patches in isolation before human sees the PR | cicd, security | L |
-| t37 | RAG knowledge store for agents | Vector DB with project metadata, approved schemas, security guidelines | cicd, ml | M |
-| t38 | Human-in-the-loop approval gate (deterministic proof) | Approval service logs every decision with timestamp + approver identity | cicd, security | M |
-
-### Infrastructure & DevOps
-
-| # | Task | Description | Tags | Effort |
-|---|------|-------------|------|:------:|
-| t39 | Docker Compose / Kubernetes manifests | Service mesh with TLS; separate namespaces for OCR sandbox | infra | L |
-| t40 | Secret management | Vault or cloud KMS; no secrets in env files or repos | infra, security | M |
-| t41 | Centralised security findings dashboard | Aggregate SARIF from SAST/DAST; single pane of glass | infra, security | M |
-| t42 | TARA (Threat Analysis & Risk Assessment) document | Required deliverable; identify threats per component, rate residual risk | security | L |
-
 ---
 
 ## Documentation
 
-- [Data Ingestion & OCR — implementation guide](docs/DATA_INGESTION_AND_OCR.md) — **read this if you're integrating with the API or OCR service**
+- [Database & Auth — implementation record](docs/DATABASE_AND_RBAC.md)
+- [Data Ingestion & OCR — implementation guide](docs/DATA_INGESTION_AND_OCR.md)
 - [Architecture overview](docs/ARCHITECTURE.md)
+- [RBAC matrix](docs/RBAC.md)
+- [PHI fields & encryption](docs/PHI_FIELDS.md)
 - [TARA — threat model](docs/TARA.md)
 - [API reference](docs/API.md)
 
@@ -168,6 +279,6 @@ cd services/ocr && pytest -v --cov=app --cov-branch
 
 - `main` — protected; requires PR + review + green CI
 - `develop` — integration branch
-- `feature/<short-name>` — your working branches (e.g. `feature/db-schema-design`)
+- `feature/<short-name>` — working branches (e.g. `feature/db-schema-design`)
 
 Every PR must pass: unit tests, SAST (no new findings), branch coverage threshold, security gate review.
