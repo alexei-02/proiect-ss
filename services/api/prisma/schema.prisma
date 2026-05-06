@@ -31,6 +31,7 @@ model User {
   lastLoginAt   DateTime?      @map("last_login_at")
   refreshTokens RefreshToken[]
   auditLogs     AuditLog[]
+  reports       Report[]
 
   @@map("users")
 }
@@ -71,4 +72,35 @@ model AuditLog {
   @@index([action, occurredAt], name: "audit_logs_action_occurred_at_idx")
   @@index([resourceType, resourceId], name: "audit_logs_resource_type_resource_id_idx")
   @@map("audit_logs")
+}
+
+model Report {
+  id          String    @id @default(uuid()) @db.Uuid
+  reportType  String    @map("report_type")
+  requestedBy String    @map("requested_by") @db.Uuid
+  status      String    @default("queued")
+  params      Json?
+  resultPath  String?   @map("result_path")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  completedAt DateTime? @map("completed_at")
+  errorMsg    String?   @map("error_msg")
+  user        User      @relation(fields: [requestedBy], references: [id])
+
+  @@index([status], name: "reports_status_idx")
+  @@index([requestedBy, createdAt], name: "reports_user_created_at_idx")
+  @@map("reports")
+}
+
+model Alert {
+  id           BigInt    @id @default(autoincrement())
+  alertType    String    @map("alert_type")
+  severity     String    @default("warning")
+  documentId   String?   @map("document_id") @db.Uuid
+  message      String
+  expiresOn    DateTime? @map("expires_on")
+  acknowledged Boolean   @default(false)
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([acknowledged, createdAt], name: "alerts_ack_created_idx")
+  @@map("alerts")
 }
