@@ -18,17 +18,16 @@ Wires up:
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastapi import FastAPI
-from prisma import Prisma
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from app.api.routes import audit_log, auth, documents, health, metrics, review
+from app.api.routes import alerts, audit_log, auth, documents, health, metrics, reports, review
 from app.core.audit import AuditMiddleware, PrismaAuditSink
 from app.core.config import get_settings
 from app.core.crypto import EnvKeyProvider, PhiCipher
@@ -38,8 +37,10 @@ from app.mqtt.consumer import MQTTConsumer
 from app.services.ocr_client import OCRClient
 from app.services.refresh_tokens import RefreshTokenStore
 from app.services.result_poller import poll_results
+from app.services.scheduler import run_scheduler
 from app.services.storage import PostgresStore
 from app.services.users import UserStore
+from prisma import Prisma
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Production TLS guard — refuse to start without sslmode on the DSN.
     if settings.env == "production" and "sslmode=" not in settings.database_url:
-        raise RuntimeError(
-            "Production deployment requires sslmode=verify-full in DATABASE_URL"
-        )
+        raise RuntimeError("Production deployment requires sslmode=verify-full in DATABASE_URL")
 
     # Database
     db = Prisma()
@@ -95,6 +94,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Hourly refresh token cleanup
     cleanup_task = asyncio.create_task(_cleanup_refresh_tokens(rt_store))
 
+    # Daily expiry alert scheduler (02:00 UTC)
+    scheduler_task = asyncio.create_task(run_scheduler(app))
+
     # MQTT consumer
     consumer: MQTTConsumer | None = None
     if settings.env != "test":
@@ -110,7 +112,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     cleanup_task.cancel()
     poller_task.cancel()
-    for task in (cleanup_task, poller_task):
+    scheduler_task.cancel()
+    for task in (cleanup_task, poller_task, scheduler_task):
         try:
             await task
         except asyncio.CancelledError:
@@ -133,6 +136,17 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    try:
+        from prometheus_fastapi_instrumentator import Instrumentator
+
+        Instrumentator().instrument(app).expose(
+            app, endpoint="/metrics/prometheus", include_in_schema=False
+        )
+    except ImportError:  # pragma: no cover
+        logger.warning(
+            "prometheus-fastapi-instrumentator not installed; /metrics/prometheus disabled"
+        )
+
     app.add_middleware(
         BodySizeLimitMiddleware,
         max_upload=settings.max_upload_size_bytes,
@@ -152,6 +166,8 @@ def create_app() -> FastAPI:
     app.include_router(review.router)
     app.include_router(metrics.router)
     app.include_router(audit_log.router)
+    app.include_router(reports.router)
+    app.include_router(alerts.router)
 
     return app
 
