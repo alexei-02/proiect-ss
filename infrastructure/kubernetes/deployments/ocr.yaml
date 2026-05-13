@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ocr
+  namespace: medical-ocr
+  labels:
+    app: ocr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ocr
+  template:
+    metadata:
+      labels:
+        app: ocr
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: ocr
+          image: medical-ocr-worker:latest
+          imagePullPolicy: Always
+          env:
+            - name: OCR_QUEUE_DIR
+              value: /queue
+            - name: MOCK_OCR
+              value: "0"
+            - name: EASYOCR_MODULE_PATH
+              value: /models
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2000m"
+              memory: "2Gi"
+          volumeMounts:
+            - name: ocr-queue
+              mountPath: /queue
+            - name: easyocr-models
+              mountPath: /models
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: ocr-queue
+          persistentVolumeClaim:
+            claimName: ocr-queue-pvc
+        - name: easyocr-models
+          persistentVolumeClaim:
+            claimName: easyocr-models-pvc
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 100Mi
+
+---
+# OCR has no network access — deny all ingress and egress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-ocr-network
+  namespace: medical-ocr
+spec:
+  podSelector:
+    matchLabels:
+      app: ocr
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: easyocr-models-pvc
+  namespace: medical-ocr
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi

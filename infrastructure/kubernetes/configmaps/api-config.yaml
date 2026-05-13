@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: medical-ocr
+data:
+  ENV: "production"
+  MQTT_HOST: "mosquitto"
+  MQTT_PORT: "8883"
+  MQTT_TLS_CA: "/certs/ca.crt"
+  MQTT_TLS_CERT: "/certs/api_server.crt"
+  MQTT_TLS_KEY: "/certs/api_server.key"
+  MQTT_CLIENT_ID: "api_server"
+  OCR_QUEUE_DIR: "/queue"
+  JWT_ALGORITHM: "HS256"
+  JWT_AUDIENCE: "medical-ocr-api"
+  JWT_ISSUER: "medical-ocr-api"
+  JWT_ACCESS_TTL_SECONDS: "900"
+  JWT_REFRESH_TTL_SECONDS: "604800"
+  DEV_AUTH_BYPASS: "false"

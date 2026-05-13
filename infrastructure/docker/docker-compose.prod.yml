@@ -1,0 +1,165 @@
+######################################################################
+# Production docker-compose.
+# Usage:
+#   docker secret create jwt_secret <(printf 'your-secret')
+#   docker secret create phi_master_key <(printf 'your-hex-key')
+#   docker secret create db_password <(printf 'your-password')
+#   docker secret create db_url <(printf 'postgresql://medical:your-password@postgres:5432/medical_ocr')
+#   IMAGE_TAG=<git-sha> docker compose -f docker-compose.prod.yml up -d
+######################################################################
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    restart: always
+    ports:
+      - "8883:8883"
+    volumes:
+      - ../mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../mosquitto/acl.conf:/mosquitto/config/acl.conf:ro
+      - ../mosquitto/certs:/mosquitto/certs:ro
+      - mosquitto_data:/mosquitto/data
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "128M"
+    networks:
+      - frontend
+      - mqtt-internal
+
+  api:
+    image: medical-ocr-api:${IMAGE_TAG:-latest}
+    restart: always
+    ports:
+      - "8989:8989"
+    environment:
+      ENV: production
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "8883"
+      MQTT_TLS_CA: /certs/ca.crt
+      MQTT_TLS_CERT: /certs/api_server.crt
+      MQTT_TLS_KEY: /certs/api_server.key
+      MQTT_CLIENT_ID: api_server
+      OCR_QUEUE_DIR: /queue
+      JWT_ALGORITHM: "HS256"
+      JWT_AUDIENCE: "medical-ocr-api"
+      JWT_ISSUER: "medical-ocr-api"
+      JWT_ACCESS_TTL_SECONDS: "900"
+      JWT_REFRESH_TTL_SECONDS: "604800"
+      DEV_AUTH_BYPASS: "false"
+      # Secrets loaded from files (Docker secrets)
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      PHI_MASTER_KEY_FILE: /run/secrets/phi_master_key
+      DATABASE_URL_FILE: /run/secrets/db_url
+    secrets:
+      - jwt_secret
+      - phi_master_key
+      - db_url
+    volumes:
+      - ../mosquitto/certs:/certs:ro
+      - ocr_queue:/queue
+    depends_on:
+      - mosquitto
+      - postgres
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "512M"
+    networks:
+      - frontend
+      - mqtt-internal
+      - api-internal
+
+  ocr:
+    image: medical-ocr-worker:${IMAGE_TAG:-latest}
+    restart: always
+    environment:
+      OCR_QUEUE_DIR: /queue
+      MOCK_OCR: "0"
+      EASYOCR_MODULE_PATH: /models
+    volumes:
+      - ocr_queue:/queue
+      - easyocr_models:/models
+    read_only: true
+    tmpfs:
+      - /tmp:size=100m,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "2G"
+    networks:
+      - ocr-isolated
+
+  frontend:
+    image: medical-ocr-frontend:${IMAGE_TAG:-latest}
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      API_BASE_URL: "http://api:8989"
+      NODE_ENV: production
+    depends_on:
+      - api
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "256M"
+    networks:
+      - frontend
+
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: medical
+      POSTGRES_DB: medical_ocr
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1G"
+    networks:
+      - api-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medical -d medical_ocr"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+secrets:
+  jwt_secret:
+    external: true
+  phi_master_key:
+    external: true
+  db_url:
+    external: true
+  db_password:
+    external: true
+
+volumes:
+  mosquitto_data:
+  ocr_queue:
+  postgres_data:
+  easyocr_models:
+
+networks:
+  frontend:
+  mqtt-internal:
+    internal: true
+  api-internal:
+    internal: true
+  ocr-isolated:
+    internal: true
