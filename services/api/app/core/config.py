@@ -1,10 +1,28 @@
 """Application settings, loaded from environment variables."""
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _read_secret(
+    env_key: str,
+    file_env_key: str | None = None,
+    default: str | None = None,
+) -> str | None:
+    """Read a secret from the file pointed at by *file_env_key* if it exists,
+    otherwise fall back to the env var *env_key*, otherwise *default*.
+    """
+    if file_env_key:
+        path = os.environ.get(file_env_key)
+        if path:
+            p = Path(path)
+            if p.exists():
+                return p.read_text().strip()
+    return os.environ.get(env_key, default)
 
 
 class Settings(BaseSettings):
@@ -39,27 +57,51 @@ class Settings(BaseSettings):
     mqtt_topic_ocr_results: str = "medical/ocr/+/results"
 
     # Database
-    database_url: str = "postgresql://medical:dev_only_replace_me@postgres:5432/medical_ocr"
+    database_url: str = Field(
+        default_factory=lambda: _read_secret(
+            "DATABASE_URL",
+            "DATABASE_URL_FILE",
+            "postgresql://medical:dev_only_replace_me@postgres:5432/medical_ocr",
+        )
+    )
 
     # OCR
     ocr_queue_dir: Path = Path("/tmp/ocr-queue")
     ocr_confidence_threshold: float = Field(default=0.95, ge=0.0, le=1.0)
 
     # JWT
-    jwt_secret: str = "change-me-in-production-use-a-long-random-secret"
+    jwt_secret: str = Field(
+        default_factory=lambda: _read_secret(
+            "JWT_SECRET",
+            "JWT_SECRET_FILE",
+            "change-me-in-production-use-a-long-random-secret",
+        )
+    )
     jwt_algorithm: str = "HS256"
     jwt_audience: str = "medical-ocr-api"
     jwt_issuer: str = "medical-ocr-api"
-    jwt_access_ttl_seconds: int = 900   # 15 minutes
+    jwt_access_ttl_seconds: int = 900  # 15 minutes
     jwt_refresh_ttl_seconds: int = 604800  # 7 days
 
     # PHI encryption — 64 hex chars = 32 bytes (AES-256 key)
-    phi_master_key: str = "0" * 64  # overridden by env; dev default is zeroes
+    phi_master_key: str = Field(
+        default_factory=lambda: _read_secret(
+            "PHI_MASTER_KEY",
+            "PHI_MASTER_KEY_FILE",
+            "0" * 64,  # dev default; overridden by env or secret file
+        )
+    )
 
     # Auth behaviour
     dev_auth_bypass: bool = False
     initial_admin_username: str = ""
-    initial_admin_password: str = ""
+    initial_admin_password: str = Field(
+        default_factory=lambda: _read_secret(
+            "INITIAL_ADMIN_PASSWORD",
+            "INITIAL_ADMIN_PASSWORD_FILE",
+            "",
+        )
+    )
 
     @field_validator("phi_master_key")
     @classmethod

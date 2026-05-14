@@ -9,13 +9,13 @@ medical-ocr-platform/
 ├── services/
 │   ├── api/              # REST API + MQTT consumer (FastAPI)
 │   ├── ocr/              # OCR worker, sandboxed (EasyOCR)
-│   └── web/              # Frontend dashboard (assigned)
+│   └── frontend/         # Dashboard UI (Next.js 14)
 ├── infrastructure/
 │   ├── mosquitto/        # MQTT broker config + ACL + certs
-│   ├── nginx/            # Reverse proxy / TLS termination
-│   └── docker/           # Compose files
-├── docs/                 # Architecture, TARA, API reference
-└── scripts/              # Dev tooling, cert generation, seed data
+│   ├── docker/           # Compose files (dev, prod, security)
+│   └── kubernetes/       # K8s manifests (deployments, network policies, HPA)
+├── docs/                 # Architecture, TARA, implementation records
+└── scripts/              # Dev tooling, cert generation, image builds, scan uploads
 ```
 
 ---
@@ -42,6 +42,7 @@ Services after startup:
 | Service | URL |
 |---|---|
 | API + Swagger UI | `http://localhost:8989/docs` |
+| Frontend dashboard | `http://localhost:3000` |
 | MQTT broker | `localhost:8883` (mTLS only) |
 | PostgreSQL | `localhost:5432` |
 | Prisma Studio | `http://localhost:5555` |
@@ -143,10 +144,20 @@ Full matrix: see [docs/DATABASE_AND_RBAC.md](docs/DATABASE_AND_RBAC.md).
 | `GET` | `/api/v1/review-queue` | admin, doctor | List items below confidence threshold |
 | `POST` | `/api/v1/review-queue/{id}/resolve` | admin, doctor | Mark a review item as resolved |
 
+### Reports & alerts
+| Method | Path | Roles | Description |
+|---|---|---|---|
+| `POST` | `/api/v1/reports` | admin, auditor | Request a new report (async, CSV) |
+| `GET` | `/api/v1/reports/{id}/status` | admin, auditor | Poll generation status |
+| `GET` | `/api/v1/reports/{id}/download` | admin, auditor | Download completed CSV |
+| `GET` | `/api/v1/alerts` | admin, auditor, doctor | List compliance / expiry alerts |
+| `POST` | `/api/v1/alerts/{id}/acknowledge` | admin, doctor | Acknowledge an alert |
+
 ### Metrics & audit
 | Method | Path | Roles | Description |
 |---|---|---|---|
-| `GET` | `/api/v1/metrics/ocr` | admin, auditor | OCR performance metrics |
+| `GET` | `/api/v1/metrics/ocr` | admin, auditor | OCR latency (p50/p95), queue depth, success rate |
+| `GET` | `/metrics/prometheus` | internal | Prometheus text exposition |
 | `GET` | `/api/v1/audit-log` | admin, auditor | Paginated PHI-access audit log |
 
 ### Health
@@ -218,11 +229,14 @@ docker cp <container_id>:/app/prisma/migrations ./services/api/prisma/migrations
 | Variable | Dev default | Description |
 |---|---|---|
 | `JWT_SECRET` | `dev-jwt-secret-…` | HMAC signing secret — **replace before real data** |
+| `JWT_SECRET_FILE` | — | Path to file containing `JWT_SECRET` (Docker/K8s secrets) |
 | `PHI_MASTER_KEY` | `000…001` (64 hex chars) | AES-256 key for PHI encryption — **replace before real data** |
+| `PHI_MASTER_KEY_FILE` | — | Path to file containing `PHI_MASTER_KEY` |
 | `DEV_AUTH_BYPASS` | `false` | `true` skips auth when no `Authorization` header is present |
 | `INITIAL_ADMIN_USERNAME` | `admin` | Seeded on first container start |
 | `INITIAL_ADMIN_PASSWORD` | `dev_admin_replace_me` | Seeded on first container start |
 | `DATABASE_URL` | `postgresql://medical:…@postgres:5432/medical_ocr` | Postgres DSN |
+| `DATABASE_URL_FILE` | — | Path to file containing `DATABASE_URL` |
 | `ENV` | `development` | `development` / `test` / `production` |
 
 > **⚠️ Before handling any real PHI:** rotate `JWT_SECRET` and `PHI_MASTER_KEY` to
@@ -257,23 +271,24 @@ cd services/ocr && ruff check app/ && ruff format --check app/
 | OCR Processing Engine | Andrei Alexei | ✅ |
 | Database & Storage | Saleem Al-Bouri | ✅ |
 | Access Control & Auth | Saleem Al-Bouri | ✅ |
-| Reporting & Dashboard | Alexandru Vidu | ⏳ |
+| Reporting & Dashboard | Alexandru Vidu | ✅ |
 | Embedded / Mobile Client | TBD | ⏳ |
 | CI/CD Pipeline & Governance | TBD | ⏳ |
 | AI-Assisted CI/CD (optional arch) | TBD | ⏳ |
-| Infrastructure & DevOps | Alexandru Vidu | ⏳ |
+| Infrastructure & DevOps | Alexandru Vidu | ✅ |
 
 ---
 
 ## Documentation
 
-- [Database & Auth — implementation record](docs/DATABASE_AND_RBAC.md)
-- [Data Ingestion & OCR — implementation guide](docs/DATA_INGESTION_AND_OCR.md)
 - [Architecture overview](docs/ARCHITECTURE.md)
+- [Data Ingestion & OCR — implementation guide](docs/DATA_INGESTION_AND_OCR.md)
+- [Database & Auth — implementation record](docs/DATABASE_AND_RBAC.md)
+- [Reporting & Dashboard — implementation record](docs/REPORTING_AND_DASHBOARD.md)
+- [Infrastructure & DevOps — implementation record](docs/INFRASTRUCTURE_AND_DEVOPS.md)
 - [RBAC matrix](docs/RBAC.md)
 - [PHI fields & encryption](docs/PHI_FIELDS.md)
 - [TARA — threat model](docs/TARA.md)
-- [API reference](docs/API.md)
 
 ## Branching & contributions
 

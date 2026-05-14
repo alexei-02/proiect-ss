@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: medical-ocr
+  labels:
+    app: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: api
+          image: medical-ocr-api:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8989
+              name: http
+          envFrom:
+            - configMapRef:
+                name: api-config
+          env:
+            # Secrets injected as env var file paths
+            - name: JWT_SECRET_FILE
+              value: /run/secrets/jwt-secret/jwt-secret
+            - name: PHI_MASTER_KEY_FILE
+              value: /run/secrets/phi-master-key/phi-master-key
+            - name: DATABASE_URL_FILE
+              value: /run/secrets/db-credentials/db-url
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            # readOnlyRootFilesystem: false — FastAPI needs to write temp files
+            readOnlyRootFilesystem: false
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8989
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8989
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: certs
+              mountPath: /certs
+              readOnly: true
+            - name: ocr-queue
+              mountPath: /queue
+            - name: jwt-secret
+              mountPath: /run/secrets/jwt-secret
+              readOnly: true
+            - name: phi-master-key
+              mountPath: /run/secrets/phi-master-key
+              readOnly: true
+            - name: db-credentials
+              mountPath: /run/secrets/db-credentials
+              readOnly: true
+      volumes:
+        - name: certs
+          secret:
+            secretName: mosquitto-tls
+        - name: ocr-queue
+          persistentVolumeClaim:
+            claimName: ocr-queue-pvc
+        - name: jwt-secret
+          secret:
+            secretName: jwt-secret
+        - name: phi-master-key
+          secret:
+            secretName: phi-master-key
+        - name: db-credentials
+          secret:
+            secretName: db-credentials
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ocr-queue-pvc
+  namespace: medical-ocr
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi

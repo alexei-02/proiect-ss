@@ -132,6 +132,20 @@ services:
       timeout: 5s
       retries: 10
 
+  frontend:
+    build:
+      context: ../../services/frontend
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      API_BASE_URL: "http://api:8989"
+    depends_on:
+      - api
+    networks:
+      - frontend
+
 volumes:
   mosquitto_data:
   ocr_queue:

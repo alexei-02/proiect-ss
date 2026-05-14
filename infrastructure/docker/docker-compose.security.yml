@@ -1,0 +1,66 @@
+######################################################################
+# Security findings dashboard — DefectDojo.
+# Run alongside the dev stack:
+#   docker compose \
+#     -f infrastructure/docker/docker-compose.dev.yml \
+#     -f infrastructure/docker/docker-compose.security.yml \
+#     up -d
+######################################################################
+
+services:
+  # Runs once to apply DB migrations and seed test types / permissions.
+  defectdojo-initializer:
+    image: defectdojo/defectdojo-django:2.45.0
+    entrypoint: ["/entrypoint-initializer.sh"]
+    environment:
+      DD_DATABASE_URL: postgresql://dojo:${DOJO_DB_PASSWORD:-dojo_dev}@dojo-postgres:5432/dojo
+      DD_SECRET_KEY: ${DEFECTDOJO_SECRET_KEY:-change-me-in-production}
+      DD_ALLOWED_HOSTS: "*"
+    depends_on:
+      dojo-postgres:
+        condition: service_healthy
+    networks:
+      - frontend
+
+  defectdojo:
+    image: defectdojo/defectdojo-django:2.45.0
+    restart: unless-stopped
+    ports:
+      - "8080:8081"
+    environment:
+      DD_SECRET_KEY: ${DEFECTDOJO_SECRET_KEY:-change-me-in-production}
+      DD_DATABASE_URL: postgresql://dojo:${DOJO_DB_PASSWORD:-dojo_dev}@dojo-postgres:5432/dojo
+      DD_ALLOWED_HOSTS: "*"
+      DD_DJANGO_ADMIN_ENABLED: "true"
+    depends_on:
+      dojo-postgres:
+        condition: service_healthy
+      defectdojo-initializer:
+        condition: service_completed_successfully
+    networks:
+      - frontend
+
+  dojo-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dojo
+      POSTGRES_PASSWORD: ${DOJO_DB_PASSWORD:-dojo_dev}
+      POSTGRES_DB: dojo
+    volumes:
+      - dojo_postgres_data:/var/lib/postgresql/data
+    networks:
+      - frontend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dojo -d dojo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  dojo_postgres_data:
+
+networks:
+  frontend:
+    external: true
+    name: docker_frontend
