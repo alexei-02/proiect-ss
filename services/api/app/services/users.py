@@ -3,12 +3,11 @@
 Kept separate from PostgresStore so the Document interface contract stays clean.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
-from prisma import Prisma
-
 from app.core.passwords import hash_password
+from prisma import Prisma
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -35,9 +34,7 @@ class UserStore:
         row = await self._db.user.find_unique(where={"id": user_id})
         return _row_to_dict(row) if row is not None else None
 
-    async def create_user(
-        self, username: str, password: str, roles: list[str]
-    ) -> dict[str, Any]:
+    async def create_user(self, username: str, password: str, roles: list[str]) -> dict[str, Any]:
         row = await self._db.user.create(
             data={
                 "username": username,
@@ -56,7 +53,7 @@ class UserStore:
     async def record_login(self, user_id: str) -> None:
         await self._db.user.update(
             where={"id": user_id},
-            data={"lastLoginAt": datetime.now(tz=timezone.utc)},
+            data={"lastLoginAt": datetime.now(tz=UTC)},
         )
 
     async def exists_with_role(self, role: str) -> bool:

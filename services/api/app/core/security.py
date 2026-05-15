@@ -18,9 +18,9 @@ Roles: admin | doctor | receptionist | auditor  (see docs/RBAC.md)
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import Callable
 
 import jwt
 from fastapi import HTTPException, Request, status
@@ -71,13 +71,13 @@ async def get_current_user(request: Request) -> User:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token expired",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None
     except jwt.PyJWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token: {exc}",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from exc
 
     user_id: str = payload["sub"]
 

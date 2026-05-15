@@ -1,7 +1,7 @@
 """JWT encoding and decoding helpers."""
 
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
@@ -10,7 +10,7 @@ from app.core.config import get_settings
 
 
 def _utcnow() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def encode_access(user_id: str, username: str, roles: list[str]) -> tuple[str, str]:

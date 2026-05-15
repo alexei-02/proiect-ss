@@ -11,7 +11,7 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
-    token_type: str = "Bearer"
+    token_type: str = "Bearer"  # noqa: S105 — OAuth2 token type, not a password
     expires_in: int  # seconds until access token expiry
 
 

@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     )
 
     # OCR
-    ocr_queue_dir: Path = Path("/tmp/ocr-queue")
+    ocr_queue_dir: Path = Path("/tmp/ocr-queue")  # noqa: S108 — intentional; overridden in prod
     ocr_confidence_threshold: float = Field(default=0.95, ge=0.0, le=1.0)
 
     # JWT

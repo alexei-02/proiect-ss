@@ -35,8 +35,14 @@ async def poll_results(queue_dir: Path, store: PostgresStore) -> None:
                 )
             except Exception as exc:
                 # Orphaned result (document not in DB) — discard rather than retry forever.
-                if "RecordNotFound" in type(exc).__name__ or "Record to update not found" in str(exc):
-                    logger.warning("Discarding orphaned result %s (document not in DB)", result_file.stem)
+                is_orphan = "RecordNotFound" in type(
+                    exc
+                ).__name__ or "Record to update not found" in str(exc)
+                if is_orphan:
+                    logger.warning(
+                        "Discarding orphaned result %s (document not in DB)",
+                        result_file.stem,
+                    )
                     result_file.unlink(missing_ok=True)
                 else:
                     logger.exception("Failed to process result file %s", result_file)

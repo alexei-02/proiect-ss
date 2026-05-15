@@ -22,12 +22,11 @@ PHI encryption:
 import asyncio
 import copy
 import logging
-from datetime import timezone
+from datetime import UTC
 from uuid import UUID
 
-from prisma import Json, Prisma
-
 from app.schemas.ocr import DocumentResponse, DocumentStatus, FieldName, OCRResult
+from prisma import Json, Prisma
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +102,7 @@ def _to_response(doc, cipher=None, audit_sink=None) -> DocumentResponse:  # type
     return DocumentResponse(
         id=UUID(doc.id),
         status=doc_status,
-        submitted_at=doc.submittedAt.replace(tzinfo=timezone.utc),
+        submitted_at=doc.submittedAt.replace(tzinfo=UTC),
         device_id=doc.deviceId,
         ocr_result=ocr_result,
     )
@@ -124,9 +123,7 @@ class PostgresStore:
         device_id: str,
         status: DocumentStatus = DocumentStatus.QUEUED,
     ) -> DocumentResponse:
-        doc = await self._db.document.create(
-            data={"status": status.value, "deviceId": device_id}
-        )
+        doc = await self._db.document.create(data={"status": status.value, "deviceId": device_id})
         return _to_response(doc, self._cipher, self._audit_sink)
 
     async def get_document(self, doc_id: UUID) -> DocumentResponse | None:
@@ -167,9 +164,7 @@ class PostgresStore:
         )
         return _to_response(doc, self._cipher, self._audit_sink)
 
-    async def list_review_queue(
-        self, *, offset: int = 0, limit: int = 50
-    ) -> list[OCRResult]:
+    async def list_review_queue(self, *, offset: int = 0, limit: int = 50) -> list[OCRResult]:
         docs = await self._db.document.find_many(
             where={"status": DocumentStatus.PENDING_REVIEW.value},
             skip=offset,

@@ -52,7 +52,11 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "B", "S", "C4", "UP"]
-ignore = ["S101"]  # allow asserts in tests
+ignore = [
+    "S101",   # allow asserts in tests
+    "B008",   # FastAPI Depends() in defaults is the correct FastAPI pattern
+    "S104",   # binding to 0.0.0.0 is intentional for Docker services
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S"]
