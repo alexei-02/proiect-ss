@@ -26,10 +26,14 @@ RUN pip install --no-cache-dir --prefix=/install . \
        PATH="/install/bin:$PATH" \
        PRISMA_BINARY_CACHE_DIR=/build/.prisma-cache \
        prisma generate --schema prisma/schema.prisma \
-    && PYTHONPATH=/install/lib/python3.11/site-packages \
-       PATH="/install/bin:$PATH" \
-       PRISMA_BINARY_CACHE_DIR=/build/.prisma-cache \
-       prisma py fetch
+    && (PYTHONPATH=/install/lib/python3.11/site-packages \
+           PATH="/install/bin:$PATH" \
+           PRISMA_BINARY_CACHE_DIR=/build/.prisma-cache \
+           prisma py fetch || true) \
+    && (find /build/.prisma-cache /install/lib/python3.11/site-packages/prisma \
+           -name "query-engine-debian-openssl-3.0.x" 2>/dev/null | head -1 | \
+           xargs -I{} cp {} /build/.prisma-cache/prisma-query-engine-debian-openssl-3.0.x \
+        || true)
 
 # ── Runtime stage ────────────────────────────────────────────────────
 # Slim, not distroless: the API needs to be able to handle TLS, env, and
@@ -57,7 +61,8 @@ COPY --from=builder /build/scripts ./scripts
 COPY --from=builder /build/.prisma-cache /var/cache/prisma
 COPY app ./app
 
-RUN chown -R 65532:65532 /var/cache/prisma
+RUN chown -R 65532:65532 /var/cache/prisma \
+    && chmod -R a+rx /var/cache/prisma
 
 # Drop root.
 USER 65532:65532

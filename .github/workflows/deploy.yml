@@ -71,6 +71,9 @@ jobs:
 
             echo "==> Pulling ref: ${DEPLOY_REF}"
             git fetch origin
+            # Discard any local edits (e.g. manual hotfixes) so checkout never
+            # aborts — the source of truth is always the pushed commit.
+            git reset --hard HEAD
             # DEPLOY_REF is a 40-char SHA (workflow_run) or a branch name (workflow_dispatch).
             if echo "${DEPLOY_REF}" | grep -qE '^[0-9a-f]{40}$'; then
                 git checkout "${DEPLOY_REF}"

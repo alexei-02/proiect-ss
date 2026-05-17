@@ -86,6 +86,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.rt_store = rt_store
     app.state.store = store
 
+    # Seed initial admin on first boot if configured and no admin exists yet.
+    if settings.initial_admin_username and settings.initial_admin_password:
+        if not await user_store.exists_with_role("admin"):
+            await user_store.create_user(
+                settings.initial_admin_username,
+                settings.initial_admin_password,
+                ["admin", "doctor"],
+            )
+            logger.info("Created initial admin user: %s", settings.initial_admin_username)
+
     # OCR client + result poller
     ocr_client = OCRClient(settings.ocr_queue_dir)
     app.state.ocr_client = ocr_client
