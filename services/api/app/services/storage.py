@@ -183,3 +183,72 @@ class PostgresStore:
             where={"id": str(doc_id)},
             data={"status": DocumentStatus.COMPLETED.value},
         )
+
+
+# ─── In-memory store (unit tests only) ───────────────────────────────────────
+
+
+class _InMemoryStore:
+    """Minimal in-memory implementation of the store interface.
+
+    Used by unit tests that need a real store without a database.
+    Not suitable for production use.
+    """
+
+    def __init__(self) -> None:
+        self._docs: dict[UUID, DocumentResponse] = {}
+
+    async def create_document(
+        self,
+        *,
+        device_id: str,
+        status: DocumentStatus = DocumentStatus.QUEUED,
+    ) -> DocumentResponse:
+        from datetime import UTC, datetime
+        from uuid import uuid4
+
+        doc = DocumentResponse(
+            id=uuid4(),
+            status=status,
+            submitted_at=datetime.now(tz=UTC),
+            device_id=device_id,
+            ocr_result=None,
+        )
+        self._docs[doc.id] = doc
+        return doc
+
+    async def get_document(self, doc_id: UUID) -> DocumentResponse | None:
+        return self._docs.get(doc_id)
+
+    async def attach_ocr_result(self, doc_id: UUID, result: OCRResult) -> DocumentResponse:
+        doc = self._docs[doc_id]
+        new_status = (
+            DocumentStatus.PENDING_REVIEW if result.needs_review else DocumentStatus.COMPLETED
+        )
+        updated = DocumentResponse(
+            id=doc.id,
+            status=new_status,
+            submitted_at=doc.submitted_at,
+            device_id=doc.device_id,
+            ocr_result=result,
+        )
+        self._docs[doc_id] = updated
+        return updated
+
+    async def list_review_queue(self, *, offset: int = 0, limit: int = 50) -> list[OCRResult]:
+        results = [
+            doc.ocr_result
+            for doc in self._docs.values()
+            if doc.status == DocumentStatus.PENDING_REVIEW and isinstance(doc.ocr_result, OCRResult)
+        ]
+        return results[offset : offset + limit]
+
+    async def resolve_review_item(self, doc_id: UUID) -> None:
+        doc = self._docs[doc_id]
+        self._docs[doc_id] = DocumentResponse(
+            id=doc.id,
+            status=DocumentStatus.COMPLETED,
+            submitted_at=doc.submitted_at,
+            device_id=doc.device_id,
+            ocr_result=doc.ocr_result,
+        )

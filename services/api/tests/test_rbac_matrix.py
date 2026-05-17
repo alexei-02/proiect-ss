@@ -54,12 +54,13 @@ _MATRIX = [
 ]
 
 
-def _ids(entry):
-    roles, method, path, expected, _ = entry
-    return f"{method}:{path}:{'+'.join(roles)}→{expected}"
+_IDS = [
+    f"{method}:{path}:{'+'.join(roles)}→{expected}"
+    for roles, method, path, expected, _ in _MATRIX
+]
 
 
-@pytest.mark.parametrize("roles,method,path_tpl,expected_status,kwargs", _MATRIX, ids=_ids)
+@pytest.mark.parametrize("roles,method,path_tpl,expected_status,kwargs", _MATRIX, ids=_IDS)
 def test_rbac(
     client: TestClient,
     auth_as,
