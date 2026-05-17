@@ -14,7 +14,9 @@ COPY prisma ./prisma
 COPY scripts ./scripts
 
 RUN pip install --no-cache-dir --prefix=/install . \
-    && PATH="/install/bin:$PATH" prisma generate --schema prisma/schema.prisma
+    && PYTHONPATH=/install/lib/python3.11/site-packages \
+       PATH="/install/bin:$PATH" \
+       prisma generate --schema prisma/schema.prisma
 
 # ── Runtime stage ────────────────────────────────────────────────────
 # Slim, not distroless: the API needs to be able to handle TLS, env, and
