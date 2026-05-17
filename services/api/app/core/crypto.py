@@ -11,7 +11,6 @@ import base64
 import os
 from abc import ABC, abstractmethod
 
-
 try:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 except ImportError as exc:  # pragma: no cover
@@ -40,8 +39,8 @@ class EnvKeyProvider(KeyProvider):
     def get_key(self, key_id: int) -> bytes:
         try:
             return self._keys[key_id]
-        except KeyError:
-            raise ValueError(f"Unknown PHI key_id: {key_id}")
+        except KeyError as exc:
+            raise ValueError(f"Unknown PHI key_id: {key_id}") from exc
 
     def current_key_id(self) -> int:
         return max(self._keys)
@@ -66,7 +65,7 @@ class PhiCipher:
     def decrypt(self, envelope: str) -> str:
         if not envelope.startswith(_PREFIX):
             raise ValueError("Value is not an encrypted PHI envelope")
-        payload = base64.b64decode(envelope[len(_PREFIX):])
+        payload = base64.b64decode(envelope[len(_PREFIX) :])
         key_id = payload[0]
         nonce = payload[1:13]
         ct_with_tag = payload[13:]

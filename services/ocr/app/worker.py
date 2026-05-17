@@ -75,8 +75,12 @@ async def process_job(job_path: Path, engine: OCREngine | MockOCREngine) -> None
 
     _write_result(settings.queue_dir, result)
     _cleanup(job_path, image_path)
-    logger.info("Processed %s in %d ms (needs_review=%s)",
-                document_id, result.processing_time_ms, needs_review)
+    logger.info(
+        "Processed %s in %d ms (needs_review=%s)",
+        document_id,
+        result.processing_time_ms,
+        needs_review,
+    )
 
 
 def _write_result(queue_dir: Path, result: OCRResult) -> None:

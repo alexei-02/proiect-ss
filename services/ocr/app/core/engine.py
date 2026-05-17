@@ -8,7 +8,6 @@ and local dev.
 
 import logging
 import os
-from io import BytesIO
 from pathlib import Path
 
 from PIL import Image
@@ -51,9 +50,19 @@ class MockOCREngine:
 
     def read(self, image_path: Path) -> list[RawBlock]:
         return [
-            RawBlock(text="Patient: Ion Popescu", confidence=0.98, bounding_box=[10, 10, 200, 30]),
-            RawBlock(text="Medication: Atorvastatin 20mg", confidence=0.92, bounding_box=[10, 40, 250, 60]),
-            RawBlock(text="2026-08-15", confidence=0.99, bounding_box=[10, 70, 100, 90]),
+            RawBlock(
+                text="Patient: Ion Popescu",
+                confidence=0.98,
+                bounding_box=[10, 10, 200, 30],
+            ),
+            RawBlock(
+                text="Medication: Atorvastatin 20mg",
+                confidence=0.92,
+                bounding_box=[10, 40, 250, 60],
+            ),
+            RawBlock(
+                text="2026-08-15", confidence=0.99, bounding_box=[10, 70, 100, 90]
+            ),
         ]
 
 
@@ -73,7 +82,9 @@ def validate_image(image_path: Path, *, max_pixels: int) -> None:
         with Image.open(image_path) as img:
             w, h = img.size
             if w * h > max_pixels:
-                raise ValueError(f"Image too large: {w}x{h} = {w * h} pixels (max {max_pixels})")
+                raise ValueError(
+                    f"Image too large: {w}x{h} = {w * h} pixels (max {max_pixels})"
+                )
     except (OSError, ValueError) as exc:
         raise ValueError(f"Invalid image: {exc}") from exc
 

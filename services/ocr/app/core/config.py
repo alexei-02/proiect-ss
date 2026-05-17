@@ -7,7 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="OCR_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="OCR_", env_file=".env", extra="ignore"
+    )
 
     queue_dir: Path = Path("/tmp/ocr-queue")
     confidence_threshold: float = Field(default=0.95, ge=0.0, le=1.0)

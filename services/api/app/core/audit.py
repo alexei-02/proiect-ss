@@ -8,22 +8,26 @@ The sink is also called by PostgresStore for phi.decrypt events.
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Callable
+from datetime import UTC, datetime
+from typing import Any
 
-from prisma import Json, Prisma
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from prisma import Json, Prisma
+
 logger = logging.getLogger(__name__)
 
 # Paths whose responses touch PHI — middleware writes an audit row for these.
-PHI_TOUCHING_PATHS = frozenset({
-    "/api/v1/documents",
-    "/api/v1/review-queue",
-})
+PHI_TOUCHING_PATHS = frozenset(
+    {
+        "/api/v1/documents",
+        "/api/v1/review-queue",
+    }
+)
 
 
 @dataclass
@@ -37,9 +41,7 @@ class AuditEvent:
     ip_address: str | None = None
     user_agent: str | None = None
     metadata: dict[str, Any] | None = None
-    occurred_at: datetime = field(
-        default_factory=lambda: datetime.now(tz=timezone.utc)
-    )
+    occurred_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 class PrismaAuditSink:
@@ -81,9 +83,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
         if not any(path.startswith(p) for p in PHI_TOUCHING_PATHS):
             return response
 
-        sink: PrismaAuditSink | None = getattr(
-            getattr(request, "app", None), "state", None
-        )
+        sink: PrismaAuditSink | None = getattr(getattr(request, "app", None), "state", None)
         if sink is not None:
             sink = getattr(sink, "audit_sink", None)
         if sink is None:

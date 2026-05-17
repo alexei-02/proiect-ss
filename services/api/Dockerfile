@@ -10,8 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY pyproject.toml ./
 COPY app ./app
+COPY prisma ./prisma
+COPY scripts ./scripts
 
-RUN pip install --no-cache-dir --prefix=/install .
+RUN pip install --no-cache-dir --prefix=/install . \
+    && PATH="/install/bin:$PATH" prisma generate --schema prisma/schema.prisma
 
 # ── Runtime stage ────────────────────────────────────────────────────
 # Slim, not distroless: the API needs to be able to handle TLS, env, and
@@ -26,6 +29,8 @@ RUN groupadd --system --gid 65532 app \
 WORKDIR /app
 
 COPY --from=builder /install /usr/local
+COPY --from=builder /build/prisma ./prisma
+COPY --from=builder /build/scripts ./scripts
 COPY app ./app
 
 # Drop root.

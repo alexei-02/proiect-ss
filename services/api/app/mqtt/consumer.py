@@ -71,7 +71,11 @@ class MQTTConsumer:
         client.connect_async(self.settings.mqtt_host, self.settings.mqtt_port, keepalive=60)
         client.loop_start()
         self._client = client
-        logger.info("MQTT consumer started, target=%s:%d", self.settings.mqtt_host, self.settings.mqtt_port)
+        logger.info(
+            "MQTT consumer started, target=%s:%d",
+            self.settings.mqtt_host,
+            self.settings.mqtt_port,
+        )
 
     async def stop(self) -> None:
         if self._client is not None:
@@ -130,5 +134,6 @@ class MQTTConsumer:
         await self.store.attach_ocr_result(result.document_id, result)
         logger.info(
             "Stored OCR result for document %s (needs_review=%s)",
-            result.document_id, result.needs_review,
+            result.document_id,
+            result.needs_review,
         )

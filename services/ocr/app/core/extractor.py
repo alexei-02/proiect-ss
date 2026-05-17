@@ -17,6 +17,7 @@ from app.core.schemas import ExtractedField, FieldName
 
 logger = logging.getLogger(__name__)
 
+
 # A "raw block" from the OCR engine.
 @dataclass
 class RawBlock:
@@ -36,11 +37,20 @@ _DATE_RE = re.compile(
 
 # Romanian and English keywords that hint at a patient-name line.
 _NAME_KEYWORDS = (
-    "patient", "pacient", "name", "nume", "pacientului",
+    "patient",
+    "pacient",
+    "name",
+    "nume",
+    "pacientului",
 )
 _MED_KEYWORDS = (
-    "medication", "medicamentul", "drug", "medicament",
-    "rx", "prescription", "reteta",
+    "medication",
+    "medicamentul",
+    "drug",
+    "medicament",
+    "rx",
+    "prescription",
+    "reteta",
 )
 
 
@@ -59,7 +69,7 @@ def _strip_keyword(text: str, keywords: tuple[str, ...]) -> str:
     for k in keywords:
         m = re.match(rf"^\s*{re.escape(k)}\s*[:\-]\s*", text, flags=re.IGNORECASE)
         if m:
-            return text[m.end():].strip()
+            return text[m.end() :].strip()
     return text.strip()
 
 

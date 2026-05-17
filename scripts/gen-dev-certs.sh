@@ -5,7 +5,7 @@
 #
 set -euo pipefail
 
-CERT_DIR="$(dirname "$0")/../infrastructure/mosquitto/certs"
+CERT_DIR="$(cd "$(dirname "$0")/.." && pwd)/infrastructure/mosquitto/certs"
 mkdir -p "$CERT_DIR"
 cd "$CERT_DIR"
 

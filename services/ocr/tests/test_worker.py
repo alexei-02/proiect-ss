@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from PIL import Image
 
+from app.core.engine import MockOCREngine
 from app.core.schemas import OCRResult
 
 
@@ -47,7 +48,7 @@ async def test_worker_processes_job_end_to_end(tmp_path: Path, monkeypatch) -> N
         })
     )
 
-    await worker.process_job(job_path)
+    await worker.process_job(job_path, MockOCREngine())
 
     # Result should be written, job + image cleaned up.
     result_path = tmp_path / f"{document_id}.result.json"
@@ -77,7 +78,7 @@ async def test_worker_handles_missing_image(tmp_path: Path, monkeypatch) -> None
         "source_device": "dev_001",
     }))
 
-    await worker.process_job(job_path)
+    await worker.process_job(job_path, MockOCREngine())
 
     # Worker should still emit a "failed" result rather than crashing.
     result_path = tmp_path / f"{document_id}.result.json"
@@ -97,7 +98,7 @@ async def test_worker_handles_malformed_job(tmp_path: Path, monkeypatch) -> None
     job_path = tmp_path / "bad.job.json"
     job_path.write_text("{not valid json")
 
-    await worker.process_job(job_path)
+    await worker.process_job(job_path, MockOCREngine())
 
     # Should be cleaned up without raising.
     assert not job_path.exists()

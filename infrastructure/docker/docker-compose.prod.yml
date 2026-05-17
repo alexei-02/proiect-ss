@@ -1,40 +1,60 @@
 ######################################################################
 # Production docker-compose.
-# Usage:
-#   docker secret create jwt_secret <(printf 'your-secret')
-#   docker secret create phi_master_key <(printf 'your-hex-key')
-#   docker secret create db_password <(printf 'your-password')
-#   docker secret create db_url <(printf 'postgresql://medical:your-password@postgres:5432/medical_ocr')
-#   IMAGE_TAG=<git-sha> docker compose -f docker-compose.prod.yml up -d
+#
+# Requires a .env.prod file in the repo root (gitignored) with:
+#
+#   DB_PASSWORD=<openssl rand -hex 32>
+#   JWT_SECRET=<openssl rand -hex 48>
+#   PHI_MASTER_KEY=<openssl rand -hex 32>
+#   INITIAL_ADMIN_USERNAME=admin
+#   INITIAL_ADMIN_PASSWORD=<strong password>
+#
+# Certs that must exist on the VM before first deploy:
+#   /opt/medical-ocr/certs/origin.crt   Cloudflare Origin Certificate
+#   /opt/medical-ocr/certs/origin.key   private key (chmod 600)
+#   /opt/medical-ocr/mqtt-certs/        mTLS certs for broker + API client
+#     ca.crt  api_server.crt  api_server.key  broker.crt  broker.key
+#
+# Usage (run from repo root):
+#   docker compose -f infrastructure/docker/docker-compose.prod.yml \
+#     --env-file .env.prod up --build -d
 ######################################################################
 
 services:
-  mosquitto:
-    image: eclipse-mosquitto:2.0
-    restart: always
-    ports:
-      - "8883:8883"
-    volumes:
-      - ../mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ../mosquitto/acl.conf:/mosquitto/config/acl.conf:ro
-      - ../mosquitto/certs:/mosquitto/certs:ro
-      - mosquitto_data:/mosquitto/data
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: "128M"
-    networks:
-      - frontend
-      - mqtt-internal
 
-  api:
-    image: medical-ocr-api:${IMAGE_TAG:-latest}
-    restart: always
+  # ── Reverse proxy (HTTPS termination via Cloudflare Origin Cert) ───
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
     ports:
-      - "8989:8989"
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /opt/medical-ocr/certs:/etc/nginx/certs:ro
+    depends_on:
+      - api
+    networks:
+      - edge
+      - api-internal
+
+  # ── REST API + MQTT consumer + result poller ───────────────────────
+  api:
+    build:
+      context: ../../services/api
+      dockerfile: Dockerfile
+    restart: unless-stopped
     environment:
       ENV: production
+      DATABASE_URL: postgresql://medical:${DB_PASSWORD}@postgres:5432/medical_ocr
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: "HS256"
+      JWT_AUDIENCE: "medical-ocr-api"
+      JWT_ISSUER: "medical-ocr-api"
+      JWT_ACCESS_TTL_SECONDS: "900"
+      JWT_REFRESH_TTL_SECONDS: "604800"
+      PHI_MASTER_KEY: ${PHI_MASTER_KEY}
+      DEV_AUTH_BYPASS: "false"
       MQTT_HOST: mosquitto
       MQTT_PORT: "8883"
       MQTT_TLS_CA: /certs/ca.crt
@@ -42,39 +62,31 @@ services:
       MQTT_TLS_KEY: /certs/api_server.key
       MQTT_CLIENT_ID: api_server
       OCR_QUEUE_DIR: /queue
-      JWT_ALGORITHM: "HS256"
-      JWT_AUDIENCE: "medical-ocr-api"
-      JWT_ISSUER: "medical-ocr-api"
-      JWT_ACCESS_TTL_SECONDS: "900"
-      JWT_REFRESH_TTL_SECONDS: "604800"
-      DEV_AUTH_BYPASS: "false"
-      # Secrets loaded from files (Docker secrets)
-      JWT_SECRET_FILE: /run/secrets/jwt_secret
-      PHI_MASTER_KEY_FILE: /run/secrets/phi_master_key
-      DATABASE_URL_FILE: /run/secrets/db_url
-    secrets:
-      - jwt_secret
-      - phi_master_key
-      - db_url
+      INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD}
     volumes:
-      - ../mosquitto/certs:/certs:ro
       - ocr_queue:/queue
+      - /opt/medical-ocr/mqtt-certs:/certs:ro
     depends_on:
-      - mosquitto
-      - postgres
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    networks:
+      - api-internal
+      - mqtt-internal
     deploy:
       resources:
         limits:
           cpus: "1.0"
           memory: "512M"
-    networks:
-      - frontend
-      - mqtt-internal
-      - api-internal
 
+  # ── OCR worker (sandboxed — no network egress, read-only FS) ───────
   ocr:
-    image: medical-ocr-worker:${IMAGE_TAG:-latest}
-    restart: always
+    build:
+      context: ../../services/ocr
+      dockerfile: Dockerfile.ocr
+    restart: unless-stopped
     environment:
       OCR_QUEUE_DIR: /queue
       MOCK_OCR: "0"
@@ -89,48 +101,44 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    networks:
+      - ocr-isolated
     deploy:
       resources:
         limits:
           cpus: "2.0"
           memory: "2G"
-    networks:
-      - ocr-isolated
 
+  # ── Frontend (Next.js) ─────────────────────────────────────────────
   frontend:
-    image: medical-ocr-frontend:${IMAGE_TAG:-latest}
-    restart: always
-    ports:
-      - "3000:3000"
+    build:
+      context: ../../services/frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
     environment:
-      API_BASE_URL: "http://api:8989"
       NODE_ENV: production
+      API_BASE_URL: "http://api:8989"
     depends_on:
       - api
+    networks:
+      - edge
+      - api-internal
     deploy:
       resources:
         limits:
           cpus: "0.5"
           memory: "256M"
-    networks:
-      - frontend
 
+  # ── Database (internal only, never exposed to host) ────────────────
   postgres:
     image: postgres:16-alpine
-    restart: always
+    restart: unless-stopped
     environment:
       POSTGRES_USER: medical
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: medical_ocr
-      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
-    secrets:
-      - db_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: "1G"
     networks:
       - api-internal
     healthcheck:
@@ -138,28 +146,44 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1G"
 
-secrets:
-  jwt_secret:
-    external: true
-  phi_master_key:
-    external: true
-  db_url:
-    external: true
-  db_password:
-    external: true
+  # ── MQTT broker (mTLS, devices connect on 8883) ────────────────────
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    restart: unless-stopped
+    ports:
+      - "8883:8883"
+    volumes:
+      - ../mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../mosquitto/acl.conf:/mosquitto/config/acl.conf:ro
+      - /opt/medical-ocr/mqtt-certs:/mosquitto/certs:ro
+      - mosquitto_data:/mosquitto/data
+    networks:
+      - edge
+      - mqtt-internal
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "128M"
 
 volumes:
-  mosquitto_data:
-  ocr_queue:
   postgres_data:
+  ocr_queue:
+  mosquitto_data:
   easyocr_models:
 
 networks:
-  frontend:
+  edge:
+    # Internet-facing: nginx binds 80/443, mosquitto binds 8883.
   mqtt-internal:
-    internal: true
+    internal: true   # Mosquitto <-> API only
   api-internal:
-    internal: true
+    internal: true   # API <-> Postgres, nginx/frontend <-> API
   ocr-isolated:
-    internal: true
+    internal: true   # OCR worker — no route to anything

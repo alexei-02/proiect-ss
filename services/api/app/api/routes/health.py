@@ -21,7 +21,9 @@ async def ready(request: Request) -> JSONResponse:
     # "are we connected" boolean across reconnects.
     mqtt_ok = request.app.state.mqtt_consumer is not None
 
-    body = {"status": "ready" if (ocr_ok and mqtt_ok) else "degraded",
-            "checks": {"ocr": ocr_ok, "mqtt": mqtt_ok}}
+    body = {
+        "status": "ready" if (ocr_ok and mqtt_ok) else "degraded",
+        "checks": {"ocr": ocr_ok, "mqtt": mqtt_ok},
+    }
     code = status.HTTP_200_OK if (ocr_ok and mqtt_ok) else status.HTTP_503_SERVICE_UNAVAILABLE
     return JSONResponse(status_code=code, content=body)

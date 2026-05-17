@@ -6,14 +6,14 @@ mirror these field names exactly.
 """
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class FieldName(str, Enum):
+class FieldName(StrEnum):
     """OCR fields we extract. Add carefully — DB schema must follow."""
 
     PATIENT_NAME = "patient_name"
@@ -35,7 +35,7 @@ class ExtractedField(BaseModel):
     bounding_box: BoundingBox | None = None
 
 
-class DocumentStatus(str, Enum):
+class DocumentStatus(StrEnum):
     QUEUED = "queued"
     PROCESSING = "processing"
     COMPLETED = "completed"

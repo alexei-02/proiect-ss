@@ -6,7 +6,7 @@ POST /api/v1/auth/logout   — revoke token(s)
 GET  /api/v1/auth/me       — return current user info
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -53,9 +53,7 @@ async def login(request: Request, body: LoginRequest) -> TokenResponse:
 
     access_token, _ = encode_access(user_row["id"], user_row["username"], user_row["roles"])
     refresh_raw, refresh_jti = encode_refresh(user_row["id"])
-    expires_at = datetime.now(tz=timezone.utc) + timedelta(
-        seconds=settings.jwt_refresh_ttl_seconds
-    )
+    expires_at = datetime.now(tz=UTC) + timedelta(seconds=settings.jwt_refresh_ttl_seconds)
     await rt_store.issue(
         user_id=user_row["id"],
         jti=refresh_jti,
@@ -86,10 +84,10 @@ async def refresh(request: Request, body: RefreshRequest) -> TokenResponse:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token",
-        )
+        ) from None
 
     row = await rt_store.lookup(body.refresh_token)
-    now_utc = datetime.now(tz=timezone.utc)
+    now_utc = datetime.now(tz=UTC)
 
     if row is None:
         raise HTTPException(
@@ -118,7 +116,7 @@ async def refresh(request: Request, body: RefreshRequest) -> TokenResponse:
 
     expires_at = row.expiresAt
     if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
+        expires_at = expires_at.replace(tzinfo=UTC)
     if expires_at < now_utc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

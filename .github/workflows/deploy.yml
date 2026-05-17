@@ -1,0 +1,97 @@
+name: Deploy to Production
+
+# Runs automatically after the CI workflow completes successfully on main.
+# Manual trigger (workflow_dispatch) also available for emergency redeploys.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Deploy even if CI did not pass (emergency only)"
+        required: false
+        default: "false"
+
+# Never run two deploys in parallel — a mid-flight deploy must finish before
+# the next one starts. cancel-in-progress: false ensures we never kill a
+# running deploy (that could leave the VM in a half-updated state).
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Hetzner VM
+    runs-on: ubuntu-latest
+
+    # Only proceed when triggered by a successful CI run (or forced manually).
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    # GitHub Environment named "production" — add required-reviewer protection
+    # in Settings > Environments for an extra approval gate.
+    environment: production
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          # Secrets are injected as env vars and written to .env.prod on the VM.
+          # They are never echoed to the log.
+          DB_PASSWORD:             ${{ secrets.PROD_DB_PASSWORD }}
+          JWT_SECRET:              ${{ secrets.PROD_JWT_SECRET }}
+          PHI_MASTER_KEY:          ${{ secrets.PROD_PHI_MASTER_KEY }}
+          INITIAL_ADMIN_USERNAME:  ${{ secrets.PROD_INITIAL_ADMIN_USERNAME }}
+          INITIAL_ADMIN_PASSWORD:  ${{ secrets.PROD_INITIAL_ADMIN_PASSWORD }}
+        with:
+          host:     ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key:      ${{ secrets.DEPLOY_SSH_KEY }}
+          # Pass the env vars above into the SSH session
+          envs: DB_PASSWORD,JWT_SECRET,PHI_MASTER_KEY,INITIAL_ADMIN_USERNAME,INITIAL_ADMIN_PASSWORD
+          command_timeout: 30m   # OCR image build can take ~15 min on first deploy
+          script: |
+            set -euo pipefail
+            cd /opt/medical-ocr
+
+            echo "==> Pulling latest code..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            # Write .env.prod from injected secrets.
+            # The file is chmod 600 so only the deploy user can read it.
+            cat > .env.prod <<EOF
+            DB_PASSWORD=${DB_PASSWORD}
+            JWT_SECRET=${JWT_SECRET}
+            PHI_MASTER_KEY=${PHI_MASTER_KEY}
+            INITIAL_ADMIN_USERNAME=${INITIAL_ADMIN_USERNAME}
+            INITIAL_ADMIN_PASSWORD=${INITIAL_ADMIN_PASSWORD}
+            EOF
+            chmod 600 .env.prod
+
+            COMPOSE="docker compose -f infrastructure/docker/docker-compose.prod.yml --env-file .env.prod"
+
+            echo "==> Building images (layer cache minimises rebuild time)..."
+            $COMPOSE build --parallel
+
+            echo "==> Running database migrations..."
+            # Run migrations in a one-off container before switching traffic.
+            $COMPOSE run --rm api \
+              prisma migrate deploy --schema /app/prisma/schema.prisma
+
+            echo "==> Starting / updating services..."
+            $COMPOSE up -d --remove-orphans
+
+            echo "==> Waiting for API health check..."
+            timeout 120 bash -c \
+              'until curl -sf http://localhost:8989/api/v1/health; do
+                 echo "  waiting..."; sleep 5
+               done'
+
+            echo "==> Pruning unused images..."
+            docker image prune -f
+
+            echo "==> Deploy complete."

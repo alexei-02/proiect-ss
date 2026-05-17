@@ -2,7 +2,7 @@
 
 import hashlib
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from prisma import Prisma
@@ -41,14 +41,12 @@ class RefreshTokenStore:
 
     async def lookup(self, raw: str) -> Any | None:
         """Return the RefreshToken Prisma row (or None) for the given raw token."""
-        return await self._db.refreshtoken.find_unique(
-            where={"tokenHash": _hash(raw)}
-        )
+        return await self._db.refreshtoken.find_unique(where={"tokenHash": _hash(raw)})
 
     async def revoke_by_hash(self, token_hash: str) -> None:
         await self._db.refreshtoken.update_many(
             where={"tokenHash": token_hash, "revokedAt": None},
-            data={"revokedAt": datetime.now(tz=timezone.utc)},
+            data={"revokedAt": datetime.now(tz=UTC)},
         )
 
     async def revoke_raw(self, raw: str) -> None:
@@ -57,15 +55,13 @@ class RefreshTokenStore:
     async def revoke_all_for_user(self, user_id: str) -> None:
         await self._db.refreshtoken.update_many(
             where={"userId": user_id, "revokedAt": None},
-            data={"revokedAt": datetime.now(tz=timezone.utc)},
+            data={"revokedAt": datetime.now(tz=UTC)},
         )
 
     async def cleanup_expired(self) -> int:
         """Delete rows expired more than 7 days ago. Returns count deleted."""
-        cutoff = datetime.now(tz=timezone.utc) - timedelta(days=7)
-        result = await self._db.refreshtoken.delete_many(
-            where={"expiresAt": {"lt": cutoff}}
-        )
+        cutoff = datetime.now(tz=UTC) - timedelta(days=7)
+        result = await self._db.refreshtoken.delete_many(where={"expiresAt": {"lt": cutoff}})
         return result
 
 

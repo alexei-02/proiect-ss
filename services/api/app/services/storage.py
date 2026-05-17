@@ -22,12 +22,11 @@ PHI encryption:
 import asyncio
 import copy
 import logging
-from datetime import timezone
+from datetime import UTC
 from uuid import UUID
 
-from prisma import Json, Prisma
-
 from app.schemas.ocr import DocumentResponse, DocumentStatus, FieldName, OCRResult
+from prisma import Json, Prisma
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +102,7 @@ def _to_response(doc, cipher=None, audit_sink=None) -> DocumentResponse:  # type
     return DocumentResponse(
         id=UUID(doc.id),
         status=doc_status,
-        submitted_at=doc.submittedAt.replace(tzinfo=timezone.utc),
+        submitted_at=doc.submittedAt.replace(tzinfo=UTC),
         device_id=doc.deviceId,
         ocr_result=ocr_result,
     )
@@ -124,9 +123,7 @@ class PostgresStore:
         device_id: str,
         status: DocumentStatus = DocumentStatus.QUEUED,
     ) -> DocumentResponse:
-        doc = await self._db.document.create(
-            data={"status": status.value, "deviceId": device_id}
-        )
+        doc = await self._db.document.create(data={"status": status.value, "deviceId": device_id})
         return _to_response(doc, self._cipher, self._audit_sink)
 
     async def get_document(self, doc_id: UUID) -> DocumentResponse | None:
@@ -167,9 +164,7 @@ class PostgresStore:
         )
         return _to_response(doc, self._cipher, self._audit_sink)
 
-    async def list_review_queue(
-        self, *, offset: int = 0, limit: int = 50
-    ) -> list[OCRResult]:
+    async def list_review_queue(self, *, offset: int = 0, limit: int = 50) -> list[OCRResult]:
         docs = await self._db.document.find_many(
             where={"status": DocumentStatus.PENDING_REVIEW.value},
             skip=offset,
@@ -187,4 +182,73 @@ class PostgresStore:
         await self._db.document.update(
             where={"id": str(doc_id)},
             data={"status": DocumentStatus.COMPLETED.value},
+        )
+
+
+# ─── In-memory store (unit tests only) ───────────────────────────────────────
+
+
+class _InMemoryStore:
+    """Minimal in-memory implementation of the store interface.
+
+    Used by unit tests that need a real store without a database.
+    Not suitable for production use.
+    """
+
+    def __init__(self) -> None:
+        self._docs: dict[UUID, DocumentResponse] = {}
+
+    async def create_document(
+        self,
+        *,
+        device_id: str,
+        status: DocumentStatus = DocumentStatus.QUEUED,
+    ) -> DocumentResponse:
+        from datetime import UTC, datetime
+        from uuid import uuid4
+
+        doc = DocumentResponse(
+            id=uuid4(),
+            status=status,
+            submitted_at=datetime.now(tz=UTC),
+            device_id=device_id,
+            ocr_result=None,
+        )
+        self._docs[doc.id] = doc
+        return doc
+
+    async def get_document(self, doc_id: UUID) -> DocumentResponse | None:
+        return self._docs.get(doc_id)
+
+    async def attach_ocr_result(self, doc_id: UUID, result: OCRResult) -> DocumentResponse:
+        doc = self._docs[doc_id]
+        new_status = (
+            DocumentStatus.PENDING_REVIEW if result.needs_review else DocumentStatus.COMPLETED
+        )
+        updated = DocumentResponse(
+            id=doc.id,
+            status=new_status,
+            submitted_at=doc.submitted_at,
+            device_id=doc.device_id,
+            ocr_result=result,
+        )
+        self._docs[doc_id] = updated
+        return updated
+
+    async def list_review_queue(self, *, offset: int = 0, limit: int = 50) -> list[OCRResult]:
+        results = [
+            doc.ocr_result
+            for doc in self._docs.values()
+            if doc.status == DocumentStatus.PENDING_REVIEW and isinstance(doc.ocr_result, OCRResult)
+        ]
+        return results[offset : offset + limit]
+
+    async def resolve_review_item(self, doc_id: UUID) -> None:
+        doc = self._docs[doc_id]
+        self._docs[doc_id] = DocumentResponse(
+            id=doc.id,
+            status=DocumentStatus.COMPLETED,
+            submitted_at=doc.submitted_at,
+            device_id=doc.device_id,
+            ocr_result=doc.ocr_result,
         )
