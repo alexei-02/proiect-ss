@@ -13,6 +13,11 @@ COPY app ./app
 COPY prisma ./prisma
 COPY scripts ./scripts
 
+# Install Node.js in the build stage so prisma generate can use it
+# (same version as the runtime stage to keep the nodeenv consistent).
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
 # PRISMA_BINARY_CACHE_DIR redirects the engine binary download so it lands
 # inside /build and can be copied to the runtime image — the non-root app
 # user has no home directory and cannot create ~/.cache at runtime.
@@ -27,6 +32,12 @@ RUN pip install --no-cache-dir --prefix=/install . \
 # logging which are easier on slim. The OCR service (which is the high-risk
 # component) gets distroless.
 FROM python:3.11-slim-bookworm
+
+# Install Node.js (Prisma CLI is Node-based; without it prisma tries to
+# download Node via nodeenv which fails in the air-gapped internal network).
+# Debian bookworm ships Node.js 18.x which satisfies Prisma 5.x (needs 16+).
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user.
 RUN groupadd --system --gid 65532 app \
