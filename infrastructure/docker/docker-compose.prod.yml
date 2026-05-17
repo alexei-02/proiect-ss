@@ -46,7 +46,7 @@ services:
     restart: unless-stopped
     environment:
       ENV: production
-      DATABASE_URL: postgresql://medical:${DB_PASSWORD}@postgres:5432/medical_ocr
+      DATABASE_URL: postgresql://medical:${DB_PASSWORD}@postgres:5432/medical_ocr?sslmode=disable
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: "HS256"
       JWT_AUDIENCE: "medical-ocr-api"
