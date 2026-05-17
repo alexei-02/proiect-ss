@@ -13,8 +13,7 @@ COPY app ./app
 COPY prisma ./prisma
 COPY scripts ./scripts
 
-RUN pip install --no-cache-dir --prefix=/install . \
-    && PYTHONPATH=/install/lib/python3.11/site-packages \
+RUN pip install --no-cache-dir --prefix=/install . && PYTHONPATH=/install/lib/python3.11/site-packages \
        PATH="/install/bin:$PATH" \
        prisma generate --schema prisma/schema.prisma
 
