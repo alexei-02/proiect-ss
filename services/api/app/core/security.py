@@ -25,6 +25,9 @@ from time import monotonic
 import jwt
 from fastapi import HTTPException, Request, status
 
+from app.core.config import get_settings
+from app.core.jwt_utils import decode_token
+
 logger = logging.getLogger(__name__)
 
 # Per-user is_active cache: user_id -> (is_active, cached_at_monotonic)
@@ -40,9 +43,6 @@ class User:
 
 
 async def get_current_user(request: Request) -> User:
-    from app.core.config import get_settings
-    from app.core.jwt_utils import decode_token
-
     settings = get_settings()
 
     # Dev/test bypass — never allowed in production.

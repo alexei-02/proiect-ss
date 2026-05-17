@@ -164,7 +164,8 @@ def _mock_prisma(stored_docs: dict):
         if "status" in data:
             doc.status = data["status"]
         if "ocrResult" in data:
-            doc.ocrResult = data["ocrResult"]
+            raw = data["ocrResult"]
+            doc.ocrResult = raw.data if hasattr(raw, "data") else raw
         return doc
 
     async def find_unique(where):

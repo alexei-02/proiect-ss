@@ -55,6 +55,8 @@ def mock_db() -> MagicMock:
     db.document.update = AsyncMock(return_value=_make_doc_row())
     db.document.find_unique = AsyncMock(return_value=None)
     db.document.find_many = AsyncMock(return_value=[])
+    db.document.count = AsyncMock(return_value=0)
+    db.query_raw = AsyncMock(return_value=[])
 
     # user — default: return an active stub so is_active checks pass.
     # Individual tests can override with db.user.find_unique.return_value = ...
