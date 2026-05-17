@@ -71,7 +71,12 @@ jobs:
 
             echo "==> Pulling ref: ${DEPLOY_REF}"
             git fetch origin
-            git checkout -B deploy "${DEPLOY_REF}"
+            # DEPLOY_REF is a 40-char SHA (workflow_run) or a branch name (workflow_dispatch).
+            if echo "${DEPLOY_REF}" | grep -qE '^[0-9a-f]{40}$'; then
+                git checkout "${DEPLOY_REF}"
+            else
+                git checkout -B deploy "origin/${DEPLOY_REF}"
+            fi
 
             # Write .env.prod from injected secrets.
             # The file is chmod 600 so only the deploy user can read it.
