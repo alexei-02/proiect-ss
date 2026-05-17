@@ -25,7 +25,11 @@ RUN pip install --no-cache-dir --prefix=/install . \
     && PYTHONPATH=/install/lib/python3.11/site-packages \
        PATH="/install/bin:$PATH" \
        PRISMA_BINARY_CACHE_DIR=/build/.prisma-cache \
-       prisma generate --schema prisma/schema.prisma
+       prisma generate --schema prisma/schema.prisma \
+    && PYTHONPATH=/install/lib/python3.11/site-packages \
+       PATH="/install/bin:$PATH" \
+       PRISMA_BINARY_CACHE_DIR=/build/.prisma-cache \
+       prisma py fetch
 
 # ── Runtime stage ────────────────────────────────────────────────────
 # Slim, not distroless: the API needs to be able to handle TLS, env, and
