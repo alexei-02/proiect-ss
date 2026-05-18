@@ -36,6 +36,17 @@ jobs:
     environment: production
 
     steps:
+      - name: Resolve deploy ref
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            # Deploy the exact SHA that CI verified — never a moving branch tip.
+            echo "ref=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+          else
+            # workflow_dispatch: deploy whatever branch the user selected.
+            echo "ref=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
@@ -46,20 +57,29 @@ jobs:
           PHI_MASTER_KEY:          ${{ secrets.PROD_PHI_MASTER_KEY }}
           INITIAL_ADMIN_USERNAME:  ${{ secrets.PROD_INITIAL_ADMIN_USERNAME }}
           INITIAL_ADMIN_PASSWORD:  ${{ secrets.PROD_INITIAL_ADMIN_PASSWORD }}
+          DEPLOY_REF:              ${{ steps.ref.outputs.ref }}
         with:
           host:     ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key:      ${{ secrets.DEPLOY_SSH_KEY }}
           # Pass the env vars above into the SSH session
-          envs: DB_PASSWORD,JWT_SECRET,PHI_MASTER_KEY,INITIAL_ADMIN_USERNAME,INITIAL_ADMIN_PASSWORD
+          envs: DB_PASSWORD,JWT_SECRET,PHI_MASTER_KEY,INITIAL_ADMIN_USERNAME,INITIAL_ADMIN_PASSWORD,DEPLOY_REF
           command_timeout: 30m   # OCR image build can take ~15 min on first deploy
           script: |
             set -euo pipefail
             cd /opt/medical-ocr
 
-            echo "==> Pulling latest code..."
-            git fetch origin main
-            git reset --hard origin/main
+            echo "==> Pulling ref: ${DEPLOY_REF}"
+            git fetch origin
+            # Discard any local edits (e.g. manual hotfixes) so checkout never
+            # aborts — the source of truth is always the pushed commit.
+            git reset --hard HEAD
+            # DEPLOY_REF is a 40-char SHA (workflow_run) or a branch name (workflow_dispatch).
+            if echo "${DEPLOY_REF}" | grep -qE '^[0-9a-f]{40}$'; then
+                git checkout "${DEPLOY_REF}"
+            else
+                git checkout -B deploy "origin/${DEPLOY_REF}"
+            fi
 
             # Write .env.prod from injected secrets.
             # The file is chmod 600 so only the deploy user can read it.
@@ -87,7 +107,7 @@ jobs:
 
             echo "==> Waiting for API health check..."
             timeout 120 bash -c \
-              'until curl -sf http://localhost:8989/api/v1/health; do
+              'until curl -sfk https://localhost/health; do
                  echo "  waiting..."; sleep 5
                done'
 

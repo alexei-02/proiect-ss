@@ -46,7 +46,7 @@ services:
     restart: unless-stopped
     environment:
       ENV: production
-      DATABASE_URL: postgresql://medical:${DB_PASSWORD}@postgres:5432/medical_ocr
+      DATABASE_URL: postgresql://medical:${DB_PASSWORD}@postgres:5432/medical_ocr?sslmode=disable
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: "HS256"
       JWT_AUDIENCE: "medical-ocr-api"
@@ -67,6 +67,13 @@ services:
     volumes:
       - ocr_queue:/queue
       - /opt/medical-ocr/mqtt-certs:/certs:ro
+    # Copy the Prisma engine binary to the flat path the Python client expects.
+    # prisma generate stores it under node_modules/; prisma-client-py looks for
+    # prisma-query-engine-* at the PRISMA_BINARY_CACHE_DIR root.
+    command:
+      - sh
+      - -c
+      - "cp /var/cache/prisma/node_modules/prisma/query-engine-debian-openssl-3.0.x /var/cache/prisma/prisma-query-engine-debian-openssl-3.0.x 2>/dev/null || true; exec uvicorn app.main:app --host 0.0.0.0 --port 8989 --proxy-headers"
     depends_on:
       postgres:
         condition: service_healthy
