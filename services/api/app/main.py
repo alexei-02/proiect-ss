@@ -27,7 +27,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from app.api.routes import alerts, audit_log, auth, documents, health, metrics, reports, review
+from app.api.routes import admin_users, alerts, audit_log, auth, documents, health, metrics, reports, review
 from app.core.audit import AuditMiddleware, PrismaAuditSink
 from app.core.config import get_settings
 from app.core.crypto import EnvKeyProvider, PhiCipher
@@ -172,6 +172,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(auth.router)
+    app.include_router(admin_users.router)
     app.include_router(documents.router)
     app.include_router(review.router)
     app.include_router(metrics.router)

@@ -3,6 +3,7 @@
 Kept separate from PostgresStore so the Document interface contract stays clean.
 """
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
@@ -59,3 +60,33 @@ class UserStore:
     async def exists_with_role(self, role: str) -> bool:
         count = await self._db.user.count(where={"roles": {"has": role}})
         return count > 0
+
+    async def list_users(self, limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+        rows, total = await asyncio.gather(
+            self._db.user.find_many(order={"createdAt": "desc"}, take=limit, skip=offset),
+            self._db.user.count(),
+        )
+        return [_row_to_dict(r) for r in rows], total
+
+    async def update_user(
+        self,
+        user_id: str,
+        *,
+        roles: list[str] | None = None,
+        is_active: bool | None = None,
+        password: str | None = None,
+    ) -> dict[str, Any] | None:
+        data: dict[str, Any] = {}
+        if roles is not None:
+            data["roles"] = roles
+        if is_active is not None:
+            data["isActive"] = is_active
+        if password is not None:
+            data["passwordHash"] = hash_password(password)
+        if not data:
+            return await self.get_by_id(user_id)
+        try:
+            row = await self._db.user.update(where={"id": user_id}, data=data)
+            return _row_to_dict(row)
+        except Exception:
+            return None

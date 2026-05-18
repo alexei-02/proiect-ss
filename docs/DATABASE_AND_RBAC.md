@@ -38,7 +38,7 @@ Both epics (t10–t17) are fully implemented on this branch. This document recor
 | `services/api/app/core/audit.py` | `AuditEvent`, `PrismaAuditSink`, `AuditMiddleware` |
 | `services/api/app/schemas/auth.py` | `LoginRequest`, `TokenResponse`, `RefreshRequest`, `LogoutRequest`, `UserMe` |
 | `services/api/app/schemas/audit.py` | `AuditLogEntry`, `AuditLogPage` |
-| `services/api/app/services/users.py` | `UserStore` — Prisma wrapper for user CRUD |
+| `services/api/app/services/users.py` | `UserStore` — Prisma wrapper for user CRUD; extended with `list_users` and `update_user` |
 | `services/api/app/services/refresh_tokens.py` | `RefreshTokenStore` — issue / rotate / revoke / cleanup |
 | `services/api/app/services/masking.py` | `mask_phi()` — redacts PHI for auditor-only callers |
 | `services/api/app/api/routes/auth.py` | `/login`, `/refresh`, `/logout`, `/me` |
@@ -53,6 +53,9 @@ Both epics (t10–t17) are fully implemented on this branch. This document recor
 | `services/api/tests/test_audit_log.py` | Middleware, sink, endpoint, IP masking |
 | `services/api/tests/test_rbac_matrix.py` | Table-driven RBAC matrix tests |
 | `services/api/tests/test_masking.py` | PHI field masking for auditor responses |
+| `services/api/app/schemas/users.py` | `CreateUserRequest`, `UpdateUserRequest`, `UserResponse`, `UserListResponse` |
+| `services/api/app/api/routes/admin_users.py` | Admin-only user management endpoints |
+| `services/api/tests/test_admin_users.py` | 21 tests covering creation, listing, retrieval, updates, and security constraints |
 
 ---
 
@@ -105,16 +108,25 @@ Leading `key_id` byte enables rotation: old envelopes decrypt with their origina
 
 | Route | admin | doctor | receptionist | auditor |
 |---|:---:|:---:|:---:|:---:|
+| `POST /api/v1/auth/login` | — | — | — | — (public) |
+| `POST /api/v1/auth/refresh` | — | — | — | — (public) |
+| `POST /api/v1/auth/logout` | ✅ | ✅ | ✅ | ✅ |
+| `GET /api/v1/auth/me` | ✅ | ✅ | ✅ | ✅ |
+| `POST /api/v1/admin/users` | ✅ | ❌ | ❌ | ❌ |
+| `GET /api/v1/admin/users` | ✅ | ❌ | ❌ | ❌ |
+| `GET /api/v1/admin/users/{id}` | ✅ | ❌ | ❌ | ❌ |
+| `PATCH /api/v1/admin/users/{id}` | ✅ | ❌ | ❌ | ❌ |
 | `POST /api/v1/documents` | ✅ | ✅ | ✅ | ❌ |
 | `GET /api/v1/documents/{id}` | ✅ | ✅ | ✅ | ✅ (PHI masked) |
 | `GET /api/v1/review-queue` | ✅ | ✅ | ❌ | ❌ |
 | `POST /api/v1/review-queue/{id}/resolve` | ✅ | ✅ | ❌ | ❌ |
+| `GET /api/v1/alerts` | ✅ | ✅ | ❌ | ✅ |
+| `POST /api/v1/alerts/{id}/acknowledge` | ✅ | ✅ | ❌ | ❌ |
+| `POST /api/v1/reports` | ✅ | ❌ | ❌ | ✅ |
+| `GET /api/v1/reports/{id}/status` | ✅ | ❌ | ❌ | ✅ |
+| `GET /api/v1/reports/{id}/download` | ✅ | ❌ | ❌ | ✅ |
 | `GET /api/v1/metrics/ocr` | ✅ | ❌ | ❌ | ✅ |
 | `GET /api/v1/audit-log` | ✅ | ❌ | ❌ | ✅ (IP→/24) |
-| `POST /api/v1/auth/login` | — | — | — | — (public) |
-| `POST /api/v1/auth/refresh` | — | — | — | — (public) |
-| `POST /api/v1/auth/logout` | any authenticated | | | |
-| `GET /api/v1/auth/me` | any authenticated | | | |
 | `GET /health`, `GET /ready` | — | — | — | — (public) |
 
 ---
@@ -134,6 +146,25 @@ Leading `key_id` byte enables rotation: old envelopes decrypt with their origina
 
 ---
 
+## User management (implemented)
+
+Admin-only CRUD for platform users, added after initial auth epic.
+
+| Endpoint | Rate limit | Notes |
+|---|---|---|
+| `POST /api/v1/admin/users` | 10/min | Creates user; username unique, password ≥ 12 chars, roles validated |
+| `GET /api/v1/admin/users` | 60/min | Paginated list (`limit`, `offset` query params) |
+| `GET /api/v1/admin/users/{id}` | 60/min | Single user by ID |
+| `PATCH /api/v1/admin/users/{id}` | 20/min | Update `roles`, `is_active`, and/or `password` |
+
+Security constraints enforced at the route layer:
+- Admin cannot deactivate their own account.
+- Admin cannot remove the `admin` role from their own account.
+- Deactivating a user immediately calls `rt_store.revoke_all_for_user()` — sessions drop within 15 min (access token TTL); refresh tokens are invalidated immediately.
+- All mutating operations emit an `admin.user.create` or `admin.user.update` audit event including the actor, target username, and changed fields (password shown as `<reset>`).
+
+---
+
 ## Out of scope (follow-ups)
 
 - Splitting `documents` into `patients/ocr_results/review_queue` separate tables.
@@ -141,7 +172,7 @@ Leading `key_id` byte enables rotation: old envelopes decrypt with their origina
 - mTLS to Postgres (certs are staged; switching `pg_hba.conf` to `cert` auth is a one-PR follow-up).
 - HMAC signing of OCR queue files.
 - KMS / Vault key provider (only `EnvKeyProvider` ships now).
-- User management routes (`POST/GET/PATCH/DELETE /users`).
-- `POST /auth/me/change-password` for the seeded admin.
+- `POST /auth/me/change-password` self-service for non-admin users.
 - Audit log partitioning and ship-to-Loki/Splunk.
 - Audit log retention enforcement (6-yr policy documented, automation is a follow-up).
+- Hard user deletion (not supported — `is_active=false` is the deactivation mechanism; hard delete would break audit log foreign keys).

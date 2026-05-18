@@ -51,6 +51,18 @@ _MATRIX = [
     (["auditor"],      "GET", "/api/v1/audit-log", 200, {}),
     (["doctor"],       "GET", "/api/v1/audit-log", 403, {}),
     (["receptionist"], "GET", "/api/v1/audit-log", 403, {}),
+
+    # GET /admin/users — admin only
+    (["admin"],        "GET", "/api/v1/admin/users", 200, {}),
+    (["doctor"],       "GET", "/api/v1/admin/users", 403, {}),
+    (["receptionist"], "GET", "/api/v1/admin/users", 403, {}),
+    (["auditor"],      "GET", "/api/v1/admin/users", 403, {}),
+
+    # GET /admin/users/{id} — admin only (mock returns a user row so admin gets 200)
+    (["admin"],        "GET", "/api/v1/admin/users/{id}", 200, {}),
+    (["doctor"],       "GET", "/api/v1/admin/users/{id}", 403, {}),
+    (["receptionist"], "GET", "/api/v1/admin/users/{id}", 403, {}),
+    (["auditor"],      "GET", "/api/v1/admin/users/{id}", 403, {}),
 ]
 
 

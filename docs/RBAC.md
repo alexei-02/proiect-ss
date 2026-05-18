@@ -13,22 +13,41 @@ This document defines the roles used in the system and their permitted operation
 
 ## Permission matrix
 
-| Operation | admin | doctor | receptionist | auditor |
-|-----------|:-----:|:------:|:------------:|:-------:|
-| Upload document via API | ✓ | ✓ | ✓ | ✗ |
-| Read document by ID | ✓ | ✓ | ✓ | partial† |
-| List review queue | ✓ | ✓ | ✗ | ✗ |
-| Resolve review item | ✓ | ✓ | ✗ | ✗ |
-| Read OCR metrics | ✓ | ✗ | ✗ | ✓ |
-| Read anonymized reports | ✓ | ✓ | ✗ | ✓ |
-| Manage users / roles | ✓ | ✗ | ✗ | ✗ |
-| Generate compliance alerts | ✓ | ✓ | ✗ | ✓ |
+| Route | admin | doctor | receptionist | auditor |
+|-------|:-----:|:------:|:------------:|:-------:|
+| `POST /api/v1/auth/login` | — | — | — | — (public) |
+| `POST /api/v1/auth/refresh` | — | — | — | — (public) |
+| `POST /api/v1/auth/logout` | ✓ | ✓ | ✓ | ✓ |
+| `GET /api/v1/auth/me` | ✓ | ✓ | ✓ | ✓ |
+| `POST /api/v1/admin/users` | ✓ | ✗ | ✗ | ✗ |
+| `GET /api/v1/admin/users` | ✓ | ✗ | ✗ | ✗ |
+| `GET /api/v1/admin/users/{id}` | ✓ | ✗ | ✗ | ✗ |
+| `PATCH /api/v1/admin/users/{id}` | ✓ | ✗ | ✗ | ✗ |
+| `POST /api/v1/documents` | ✓ | ✓ | ✓ | ✗ |
+| `GET /api/v1/documents/{id}` | ✓ | ✓ | ✓ | ✓ (PHI masked) |
+| `GET /api/v1/review-queue` | ✓ | ✓ | ✗ | ✗ |
+| `POST /api/v1/review-queue/{id}/resolve` | ✓ | ✓ | ✗ | ✗ |
+| `GET /api/v1/alerts` | ✓ | ✓ | ✗ | ✓ |
+| `POST /api/v1/alerts/{id}/acknowledge` | ✓ | ✓ | ✗ | ✗ |
+| `POST /api/v1/reports` | ✓ | ✗ | ✗ | ✓ |
+| `GET /api/v1/reports/{id}/status` | ✓ | ✗ | ✗ | ✓ |
+| `GET /api/v1/reports/{id}/download` | ✓ | ✗ | ✗ | ✓ |
+| `GET /api/v1/metrics/ocr` | ✓ | ✗ | ✗ | ✓ |
+| `GET /api/v1/audit-log` | ✓ | ✗ | ✗ | ✓ (IP→/24) |
+| `GET /health`, `GET /ready` | — | — | — | — (public) |
 
-† Auditor sees documents with PHI fields auto-masked.
+## Admin user management constraints
+
+- Admin cannot deactivate their own account (self-lockout prevention).
+- Admin cannot remove the `admin` role from their own account.
+- Deactivating a user (`is_active: false`) immediately revokes all their refresh tokens.
+- All mutating operations (`create`, `update`) are written to the audit log with action `admin.user.create` or `admin.user.update`.
+- Password minimum length: 12 characters (NIST SP 800-63B). Usernames: 3–64 chars, `[a-zA-Z0-9_\-]` only.
+- Valid roles are `admin`, `doctor`, `receptionist`, `auditor`. A user may hold multiple roles.
 
 ## Implementation notes
 
-- Routes declare a single role via `Depends(require_role("doctor"))`. If a route is accessible by multiple roles, use `Depends(require_any_role("doctor", "admin"))` (the helper is to be added by the Auth epic).
-- An `admin` does NOT automatically inherit lower roles — explicit allowlist. This avoids accidental privilege escalation.
-- Roles are stored in the JWT claims under `roles` (array of strings).
-- Token TTL: 15 minutes for access tokens, 7 days for refresh tokens (proposal — Auth epic to confirm).
+- Use `Depends(require_role("admin"))` for single-role routes and `Depends(require_any_role("admin", "doctor"))` for multi-role routes. Both are defined in `app/core/security.py`.
+- An `admin` does NOT automatically inherit lower roles — explicit allowlist per route. This avoids accidental privilege escalation.
+- Roles are stored in the JWT `roles` claim (array of strings) and in `User.roles` (PostgreSQL `String[]`).
+- Token TTL: 15 minutes for access tokens, 7 days for refresh tokens.

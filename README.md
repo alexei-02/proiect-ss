@@ -118,7 +118,7 @@ header is present. Requests without a header are treated as the built-in
 | `receptionist` | Upload and read documents |
 | `auditor` | Read documents (PHI masked), view metrics, view audit log (IP masked to /24) |
 
-Full matrix: see [docs/DATABASE_AND_RBAC.md](docs/DATABASE_AND_RBAC.md).
+Full matrix: see [docs/RBAC.md](docs/RBAC.md).
 
 ---
 
@@ -152,6 +152,14 @@ Full matrix: see [docs/DATABASE_AND_RBAC.md](docs/DATABASE_AND_RBAC.md).
 | `GET` | `/api/v1/reports/{id}/download` | admin, auditor | Download completed CSV |
 | `GET` | `/api/v1/alerts` | admin, auditor, doctor | List compliance / expiry alerts |
 | `POST` | `/api/v1/alerts/{id}/acknowledge` | admin, doctor | Acknowledge an alert |
+
+### Admin — user management
+| Method | Path | Roles | Description |
+|---|---|---|---|
+| `POST` | `/api/v1/admin/users` | admin | Create a new user |
+| `GET` | `/api/v1/admin/users` | admin | List all users (paginated) |
+| `GET` | `/api/v1/admin/users/{id}` | admin | Get a single user |
+| `PATCH` | `/api/v1/admin/users/{id}` | admin | Update roles, active status, or password |
 
 ### Metrics & audit
 | Method | Path | Roles | Description |

@@ -69,9 +69,10 @@ def mock_db() -> MagicMock:
     _active_user.createdAt = None
     _active_user.lastLoginAt = None
     db.user.find_unique = AsyncMock(return_value=_active_user)
-    db.user.create = AsyncMock()
-    db.user.update = AsyncMock()
-    db.user.count = AsyncMock(return_value=0)
+    db.user.find_many = AsyncMock(return_value=[_active_user])
+    db.user.create = AsyncMock(return_value=_active_user)
+    db.user.update = AsyncMock(return_value=_active_user)
+    db.user.count = AsyncMock(return_value=1)
 
     # refresh_token
     db.refreshtoken.create = AsyncMock()
