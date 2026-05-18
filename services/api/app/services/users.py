@@ -61,7 +61,9 @@ class UserStore:
         count = await self._db.user.count(where={"roles": {"has": role}})
         return count > 0
 
-    async def list_users(self, limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+    async def list_users(
+        self, limit: int = 50, offset: int = 0
+    ) -> tuple[list[dict[str, Any]], int]:
         rows, total = await asyncio.gather(
             self._db.user.find_many(order={"createdAt": "desc"}, take=limit, skip=offset),
             self._db.user.count(),

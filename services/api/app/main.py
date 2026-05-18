@@ -27,7 +27,17 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from app.api.routes import admin_users, alerts, audit_log, auth, documents, health, metrics, reports, review
+from app.api.routes import (
+    admin_users,
+    alerts,
+    audit_log,
+    auth,
+    documents,
+    health,
+    metrics,
+    reports,
+    review,
+)
 from app.core.audit import AuditMiddleware, PrismaAuditSink
 from app.core.config import get_settings
 from app.core.crypto import EnvKeyProvider, PhiCipher

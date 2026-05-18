@@ -160,7 +160,7 @@ async def update_user(
         if body.is_active is not None:
             changes["is_active"] = body.is_active
         if body.password is not None:
-            changes["password"] = "<reset>"
+            changes["password"] = "<reset>"  # noqa: S105
         await audit_sink.write(
             AuditEvent(
                 action="admin.user.update",

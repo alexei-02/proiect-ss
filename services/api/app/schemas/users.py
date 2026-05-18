@@ -17,7 +17,9 @@ class CreateUserRequest(BaseModel):
     def validate_roles(cls, v: list[str]) -> list[str]:
         invalid = set(v) - VALID_ROLES
         if invalid:
-            raise ValueError(f"Invalid roles: {sorted(invalid)}. Valid roles: {sorted(VALID_ROLES)}")
+            raise ValueError(
+                f"Invalid roles: {sorted(invalid)}. Valid roles: {sorted(VALID_ROLES)}"
+            )
         return list(dict.fromkeys(v))  # deduplicate, preserve order
 
 
@@ -41,7 +43,9 @@ class UpdateUserRequest(BaseModel):
             raise ValueError("roles must not be empty")
         invalid = set(v) - VALID_ROLES
         if invalid:
-            raise ValueError(f"Invalid roles: {sorted(invalid)}. Valid roles: {sorted(VALID_ROLES)}")
+            raise ValueError(
+                f"Invalid roles: {sorted(invalid)}. Valid roles: {sorted(VALID_ROLES)}"
+            )
         return list(dict.fromkeys(v))
 
 
